@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Playwright browser cache
+playwright/.cache/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# VS Code (remove this line if you want to commit workspace settings)
+.vscode/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Output screenshots (never commit generated images)
+*.png
+*.jpg
+
+# Logs
+*.log
