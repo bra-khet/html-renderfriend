@@ -7,8 +7,8 @@ How to test:
     2.  Drag an .html file onto the drop zone — screenshot fires automatically.
     3.  Or type/paste a URL into the entry field → click Screenshot.
     4.  Or switch to the "Paste HTML" tab, paste raw markup, click Screenshot.
-    5.  Output defaults to Desktop/screenshot_<timestamp>.png.
-        Use "Save As…" or the menu to choose a fixed path.
+    5.  Output defaults to Desktop/<template>.png (template configurable via Settings).
+        Use "Save As…" to pin a specific path for the current session.
 
 Dependencies (install once):
     pip install customtkinter tkinterdnd2 playwright
@@ -21,17 +21,20 @@ PyInstaller single-file EXE (run from project root after pip install pyinstaller
 
 import json
 import os
+import re
 import tempfile
 import threading
+import time as _time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
+from urllib.parse import urlparse
 
 import customtkinter as ctk
 from tkinterdnd2 import TkinterDnD, DND_FILES
 
-from screenshot import take_full_screenshot
+from screenshot import take_full_screenshot, _resolve_url
 
 # ── Design tokens ──────────────────────────────────────────────────────────────
 _ACCENT       = "#00ffaa"
@@ -44,6 +47,7 @@ _DROP_HOT     = "#0d2a1c"
 VIEWPORT_OPTIONS = ["1280", "1440", "1920", "2560"]
 DEFAULT_VIEWPORT = "1920"
 
+# ── Config persistence ─────────────────────────────────────────────────────────
 _CONFIG_PATH = Path.home() / ".html2png_config.json"
 
 
@@ -56,6 +60,250 @@ def _load_config() -> dict:
 
 def _save_config(data: dict) -> None:
     _CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# ── Filename template engine ───────────────────────────────────────────────────
+DEFAULT_TEMPLATE = "{name}_{date}_{time}"
+
+# (token, description, example value shown in Settings dialog)
+_TEMPLATE_VARS = [
+    ("{name}",   "Hostname (no www.) or file stem",   "github"),
+    ("{domain}", "Full hostname",                      "www.github.com"),
+    ("{date}",   "Date  YYYY-MM-DD",                  "2026-03-26"),
+    ("{year}",   "Year",                               "2026"),
+    ("{month}",  "Month",                              "03"),
+    ("{day}",    "Day",                                "26"),
+    ("{time}",   "Time  HH-MM-SS",                    "14-30-00"),
+    ("{ts}",     "Unix timestamp",                     "1743000000"),
+    ("{title}",  "Page <title> tag",                  "My Page"),
+    ("{seq}",    "Auto-increment  001, 002 …",         "001"),
+    ("{width}",  "Viewport width (px)",                "1920"),
+]
+
+_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _sanitize(s: str, max_len: int = 80) -> str:
+    """Replace filesystem-unsafe characters and truncate."""
+    s = _UNSAFE.sub("-", s).strip("-. ")
+    return s[:max_len] or "untitled"
+
+
+def _resolve_filename(
+    template: str,
+    source: str,
+    viewport: int,
+    page_title: str = "",
+    output_dir: str | Path = "",
+) -> str:
+    """
+    Expand template variables into a concrete filename (with .png extension).
+    Handles {seq} by scanning output_dir for collisions.
+    """
+    now = datetime.now()
+
+    if os.path.isfile(source):
+        name   = Path(source).stem
+        domain = ""
+    else:
+        try:
+            parsed = urlparse(source if "://" in source else f"https://{source}")
+            domain = parsed.hostname or ""
+            name   = re.sub(r"^www\.", "", domain)
+        except Exception:
+            name = domain = "screenshot"
+
+    safe_title = _sanitize(page_title) if page_title else (name or "screenshot")
+
+    subs = {
+        "{name}":   _sanitize(name)   or "screenshot",
+        "{domain}": _sanitize(domain) or name or "screenshot",
+        "{date}":   now.strftime("%Y-%m-%d"),
+        "{year}":   now.strftime("%Y"),
+        "{month}":  now.strftime("%m"),
+        "{day}":    now.strftime("%d"),
+        "{time}":   now.strftime("%H-%M-%S"),
+        "{ts}":     str(int(_time.time())),
+        "{title}":  safe_title,
+        "{width}":  str(viewport),
+    }
+
+    stem = template
+    for token, val in subs.items():
+        stem = stem.replace(token, val)
+
+    # {seq} — find next non-colliding sequence number
+    if "{seq}" in stem:
+        base = stem.replace("{seq}", "")
+        seq  = 1
+        if output_dir:
+            while Path(output_dir, f"{base}{seq:03d}.png").exists():
+                seq += 1
+        stem = stem.replace("{seq}", f"{seq:03d}")
+
+    stem = _sanitize(stem) or "screenshot"
+    return stem + ".png"
+
+
+# ── Settings dialog ────────────────────────────────────────────────────────────
+
+class SettingsDialog(ctk.CTkToplevel):
+    """Modal dialog for persistent output directory and filename template."""
+
+    def __init__(self, parent: ctk.CTk, config: dict) -> None:
+        super().__init__(parent)
+        self._config  = config
+        self._result: dict | None = None
+
+        self.title("Screenshot Settings")
+        self.geometry("540x680")
+        self.resizable(True, True)
+        self.minsize(480, 620)
+        self.grab_set()
+        self.focus_set()
+
+        self._dir_var  = tk.StringVar(
+            value=config.get("output_dir", str(Path.home() / "Desktop"))
+        )
+        self._tmpl_var = tk.StringVar(
+            value=config.get("filename_template", DEFAULT_TEMPLATE)
+        )
+
+        self._build_ui()
+        self._tmpl_var.trace_add("write", self._update_preview)
+        self._update_preview()
+
+        self.wait_window(self)   # block caller until dialog closes
+
+    def _build_ui(self) -> None:
+        self.grid_columnconfigure(0, weight=1)
+
+        # ── Output directory ──────────────────────────────────────────────────
+        s1 = ctk.CTkFrame(self, fg_color="transparent")
+        s1.grid(row=0, column=0, sticky="ew", padx=22, pady=(20, 0))
+        s1.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            s1, text="Output Directory",
+            font=ctk.CTkFont("Segoe UI", 12, "bold"), anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        ctk.CTkEntry(
+            s1, textvariable=self._dir_var, height=34,
+        ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+
+        ctk.CTkButton(
+            s1, text="Browse…", width=90, height=34,
+            command=self._browse_dir,
+        ).grid(row=1, column=1, sticky="e", padx=(6, 0), pady=(4, 0))
+
+        # ── Filename template ─────────────────────────────────────────────────
+        s2 = ctk.CTkFrame(self, fg_color="transparent")
+        s2.grid(row=1, column=0, sticky="ew", padx=22, pady=(18, 0))
+        s2.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            s2, text="Filename Template",
+            font=ctk.CTkFont("Segoe UI", 12, "bold"), anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(
+            s2, text="Use {variables} below — .png is appended automatically.",
+            font=ctk.CTkFont("Segoe UI", 10), text_color="gray", anchor="w",
+        ).grid(row=1, column=0, sticky="w")
+
+        ctk.CTkEntry(
+            s2, textvariable=self._tmpl_var,
+            font=ctk.CTkFont("Cascadia Code", 12), height=34,
+        ).grid(row=2, column=0, sticky="ew", pady=(4, 0))
+
+        self._preview_label = ctk.CTkLabel(
+            s2, text="", anchor="w",
+            font=ctk.CTkFont("Cascadia Code", 10), text_color="gray",
+        )
+        self._preview_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+
+        # ── Variable reference ─────────────────────────────────────────────────
+        s3 = ctk.CTkFrame(self)
+        s3.grid(row=2, column=0, sticky="ew", padx=22, pady=(16, 0))
+        s3.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            s3, text="Available Variables",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"), anchor="w",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 2))
+
+        for i, (token, desc, example) in enumerate(_TEMPLATE_VARS):
+            row_bg = "#1e1e1e" if i % 2 == 0 else "transparent"
+            ctk.CTkLabel(
+                s3, text=token,
+                font=ctk.CTkFont("Cascadia Code", 11), text_color=_ACCENT,
+                fg_color=row_bg, anchor="w",
+            ).grid(row=i + 1, column=0, sticky="ew", padx=(10, 8), pady=1)
+            ctk.CTkLabel(
+                s3, text=desc,
+                font=ctk.CTkFont("Segoe UI", 11),
+                fg_color=row_bg, anchor="w",
+            ).grid(row=i + 1, column=1, sticky="ew", pady=1)
+            ctk.CTkLabel(
+                s3, text=example,
+                font=ctk.CTkFont("Cascadia Code", 10), text_color="gray",
+                fg_color=row_bg, anchor="e",
+            ).grid(row=i + 1, column=2, sticky="e", padx=(8, 10), pady=1)
+
+        # ── Buttons ───────────────────────────────────────────────────────────
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.grid(row=3, column=0, sticky="ew", padx=22, pady=(16, 20))
+
+        ctk.CTkButton(
+            btns, text="Reset to Default", width=140,
+            fg_color="transparent", border_width=1,
+            command=self._reset,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btns, text="Save",
+            width=90, fg_color=_ACCENT, hover_color=_ACCENT_HOVER,
+            text_color="#000000", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            command=self._save,
+        ).pack(side="right")
+
+        ctk.CTkButton(
+            btns, text="Cancel", width=90,
+            fg_color="transparent", border_width=1,
+            command=self.destroy,
+        ).pack(side="right", padx=(0, 6))
+
+    def _browse_dir(self) -> None:
+        d = filedialog.askdirectory(
+            title="Select default output directory",
+            initialdir=self._dir_var.get() or str(Path.home() / "Desktop"),
+            parent=self,
+        )
+        if d:
+            self._dir_var.set(d)
+
+    def _update_preview(self, *_) -> None:
+        tmpl = self._tmpl_var.get().strip() or DEFAULT_TEMPLATE
+        filename = _resolve_filename(
+            tmpl, "https://github.com", 1920, "My Sample Page", ""
+        )
+        self._preview_label.configure(text=f"Preview:  {filename}")
+
+    def _reset(self) -> None:
+        self._tmpl_var.set(DEFAULT_TEMPLATE)
+        self._dir_var.set(str(Path.home() / "Desktop"))
+
+    def _save(self) -> None:
+        d = self._dir_var.get().strip()
+        t = self._tmpl_var.get().strip() or DEFAULT_TEMPLATE
+        if not d:
+            messagebox.showwarning(
+                "No Directory", "Please select an output directory.", parent=self,
+            )
+            return
+        self._result = {"output_dir": d, "filename_template": t}
+        self.destroy()
 
 
 # ── Main application window ────────────────────────────────────────────────────
@@ -74,7 +322,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def __init__(self) -> None:
         super().__init__()
-        # Inject TkinterDnD protocol support into this CTk window.
         self.TkdndVersion = TkinterDnD._require(self)
 
         ctk.set_appearance_mode("dark")
@@ -82,7 +329,8 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self.title("HTML2PNG • Full-Page Screenshotter v1.0")
         self.geometry("800x660")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(700, 560)
 
         # ── State ──────────────────────────────────────────────────────────────
         self._config         = _load_config()
@@ -100,7 +348,7 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)   # Log pane takes spare vertical space
+        self.grid_rowconfigure(4, weight=1)
 
         self._build_topbar(row=0)
         self._build_tabs(row=1)
@@ -127,7 +375,7 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
             offvalue="light",
             command=self._toggle_theme,
         )
-        self._theme_switch.select()   # Start in dark mode
+        self._theme_switch.select()
         self._theme_switch.grid(row=0, column=1, sticky="e")
 
     def _build_tabs(self, row: int) -> None:
@@ -144,7 +392,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _build_drop_tab(self, parent: ctk.CTkFrame) -> None:
         parent.grid_columnconfigure(0, weight=1)
 
-        # Drop zone —————————————————————————————————————————————————————————
         self._drop_frame = ctk.CTkFrame(
             parent,
             height=148,
@@ -166,15 +413,12 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         self._drop_label.grid(row=0, column=0)
 
-        # Register both the frame and label as drop targets (the label covers
-        # most of the frame's visible area and would otherwise swallow events).
         for widget in (self._drop_frame, self._drop_label):
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind("<<Drop>>",      self._on_drop)
             widget.dnd_bind("<<DragEnter>>", self._on_drag_enter)
             widget.dnd_bind("<<DragLeave>>", self._on_drag_leave)
 
-        # URL / file-path entry ——————————————————————————————————————————————
         ef = ctk.CTkFrame(parent, fg_color="transparent")
         ef.grid(row=1, column=0, sticky="ew")
         ef.grid_columnconfigure(0, weight=1)
@@ -240,12 +484,21 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkButton(
             bar,
+            text="Settings…",
+            width=90,
+            fg_color="transparent",
+            border_width=1,
+            command=self._open_settings,
+        ).pack(side="right")
+
+        ctk.CTkButton(
+            bar,
             text="Save As…",
             width=90,
             fg_color="transparent",
             border_width=1,
             command=self._choose_output,
-        ).pack(side="right")
+        ).pack(side="right", padx=(0, 6))
 
     def _build_progress(self, row: int) -> None:
         self._progress = ctk.CTkProgressBar(self, mode="indeterminate", height=8)
@@ -298,7 +551,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
     def _bind_shortcuts(self) -> None:
-        # Ctrl+S → screenshot; Ctrl+D → paste clipboard as source; Esc → quit.
         self.bind("<Control-s>", lambda _: self._trigger_screenshot())
         self.bind("<Control-d>", self._paste_clipboard)
         self.bind("<Escape>",    lambda _: self.quit())
@@ -313,7 +565,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._reset_drop_zone()
 
     def _on_drop(self, event: tk.Event) -> None:  # type: ignore[type-arg]
-        # tkinterdnd2 wraps paths that contain spaces in curly braces.
         raw = event.data.strip().lstrip("{").rstrip("}")
         self._input_source.set(raw)
         self._reset_drop_zone()
@@ -333,7 +584,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._theme_switch.configure(text=f"{mode.capitalize()} mode")
 
     def _paste_clipboard(self, _event: object = None) -> None:
-        """Ctrl+D — paste clipboard text as the URL/path source."""
         try:
             text = self.clipboard_get().strip()
             self._input_source.set(text)
@@ -353,12 +603,12 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._log(f"Selected: {path}")
 
     def _choose_output(self) -> None:
-        """Prompt once for a fixed output path; reused until changed."""
+        """Prompt for a fixed output path; reused until changed."""
         path = filedialog.asksaveasfilename(
             title="Save screenshot as…",
             defaultextension=".png",
             filetypes=[("PNG image", "*.png")],
-            initialdir=str(Path.home() / "Desktop"),
+            initialdir=self._config.get("output_dir", str(Path.home() / "Desktop")),
             initialfile=f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png",
         )
         if path:
@@ -367,10 +617,21 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
             _save_config(self._config)
             self._log(f"Output path set: {path}")
 
+    def _open_settings(self) -> None:
+        dlg = SettingsDialog(self, self._config)
+        if dlg._result:
+            self._config.update(dlg._result)
+            _save_config(self._config)
+            self._log(
+                f"Settings saved — "
+                f"dir: {dlg._result['output_dir']}  "
+                f"template: {dlg._result['filename_template']}"
+            )
+
     # ── Screenshot orchestration ───────────────────────────────────────────────
 
     def _trigger_screenshot(self) -> None:
-        """Resolve source + output, then launch background worker thread."""
+        """Resolve source + output resolver, then launch background worker thread."""
         if self._worker_running:
             self._log("Already running — please wait.")
             return
@@ -400,16 +661,22 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 return
             self._tmp_html_path = None
 
-        # ── Resolve output ────────────────────────────────────────────────────
+        viewport = int(self._viewport_var.get())
+
+        # ── Build output resolver ─────────────────────────────────────────────
         fixed = self._saved_output.get().strip()
         if fixed:
-            output = fixed
+            # Save As override — use the exact path regardless of template.
+            output_resolver = lambda _title: fixed
         else:
-            desktop = Path.home() / "Desktop"
-            desktop.mkdir(exist_ok=True)
-            output = str(desktop / f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png")
+            output_dir = self._config.get("output_dir", str(Path.home() / "Desktop"))
+            template   = self._config.get("filename_template", DEFAULT_TEMPLATE)
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        viewport = int(self._viewport_var.get())
+            def output_resolver(page_title: str, _src=source, _vp=viewport,
+                                 _tmpl=template, _dir=output_dir) -> str:
+                fname = _resolve_filename(_tmpl, _src, _vp, page_title, _dir)
+                return str(Path(_dir) / fname)
 
         # ── Dispatch ──────────────────────────────────────────────────────────
         self._set_busy(True)
@@ -417,29 +684,80 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         threading.Thread(
             target=self._worker,
-            args=(source, output, viewport),
-            daemon=True,   # Thread dies automatically when the window closes.
+            args=(source, output_resolver, viewport),
+            daemon=True,
         ).start()
 
-    def _worker(self, source: str, output: str, viewport: int) -> None:
+    def _worker(self, source: str, output_resolver, viewport: int) -> None:
         """
-        Runs on the background thread.
-        Calls the synchronous Playwright API without blocking the GUI event loop.
-        All Tkinter updates are deferred to the main thread via self.after(0, …).
+        Background thread.  Handles protocol auto-detection and HTTPS → HTTP
+        fallback with a main-thread confirmation dialog via threading.Event.
         """
+        resolved_source, was_upgraded = _resolve_url(source)
+        if was_upgraded:
+            self.after(0, lambda: self._log(
+                f"No protocol specified — trying HTTPS: {resolved_source}"
+            ))
+
         try:
-            take_full_screenshot(source, output, viewport)
-            self.after(0, lambda: self._on_success(output))
-        except Exception as exc:  # noqa: BLE001
-            msg = str(exc)
+            _title, final_path = take_full_screenshot(
+                resolved_source, output_resolver, viewport
+            )
+            self.after(0, lambda: self._on_success(final_path))
+            return
+        except Exception as exc:
+            if not was_upgraded and not resolved_source.startswith("https://"):
+                # Not an upgraded URL — no HTTP fallback to offer.
+                msg = str(exc)
+                self.after(0, lambda: self._on_error(msg))
+                self._cleanup_tmp()
+                return
+            https_exc = exc
+
+        # HTTPS failed — ask user whether to retry with HTTP.
+        retry_event  = threading.Event()
+        retry_result = [False]
+
+        def _ask() -> None:
+            retry_result[0] = messagebox.askyesno(
+                "HTTPS Connection Failed",
+                f"Could not connect over HTTPS.\n\n"
+                f"Retry with HTTP (unencrypted)?\n\n"
+                f"URL: {resolved_source}",
+                icon="warning",
+            )
+            retry_event.set()
+
+        self.after(0, _ask)
+        retry_event.wait()   # blocks worker thread; GUI thread remains responsive
+
+        if not retry_result[0]:
+            msg = str(https_exc)
+            self.after(0, lambda: self._on_error(msg))
+            self._cleanup_tmp()
+            return
+
+        # HTTP retry
+        http_source = "http://" + resolved_source.removeprefix("https://")
+        self.after(0, lambda: self._log(f"Retrying over HTTP: {http_source}"))
+
+        try:
+            _title, final_path = take_full_screenshot(
+                http_source, output_resolver, viewport
+            )
+            self.after(0, lambda: self._on_success(final_path))
+        except Exception as exc2:
+            msg = str(exc2)
             self.after(0, lambda: self._on_error(msg))
         finally:
-            # Clean up the temp file created for pasted HTML.
-            if self._tmp_html_path and os.path.exists(self._tmp_html_path):
-                try:
-                    os.unlink(self._tmp_html_path)
-                except OSError:
-                    pass
+            self._cleanup_tmp()
+
+    def _cleanup_tmp(self) -> None:
+        if self._tmp_html_path and os.path.exists(self._tmp_html_path):
+            try:
+                os.unlink(self._tmp_html_path)
+            except OSError:
+                pass
 
     # ── Post-worker callbacks (run on main thread) ─────────────────────────────
 
@@ -471,7 +789,6 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._progress.set(0)
 
     def _log(self, message: str) -> None:
-        """Append a timestamped entry to the log pane. Always call from main thread."""
         ts   = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}]  {message}\n"
         self._log_box.configure(state="normal")
@@ -480,9 +797,8 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._log_box.configure(state="disabled")
 
     def _open_output_folder(self) -> None:
-        """Open the folder containing the last saved PNG in Windows Explorer."""
         folder = str(Path(self._last_output).parent)
-        os.startfile(folder)    # Windows-only; safe on the Win 10 target platform
+        os.startfile(folder)
 
     def mainloop(self, n: int = 0) -> None:  # type: ignore[override]
         super().mainloop(n)

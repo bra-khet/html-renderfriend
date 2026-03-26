@@ -11,32 +11,56 @@ Core function take_full_screenshot() is imported by the GUI as well.
 
 import argparse
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 
+def _resolve_url(raw: str) -> tuple[str, bool]:
+    """
+    Normalise a user-supplied source string.
+
+    Returns:
+        (resolved, was_upgraded) where was_upgraded is True when https:// was
+        prepended automatically.  Local file paths and already-schemed strings
+        pass through unchanged.
+    """
+    if os.path.isfile(raw):
+        return raw, False
+    if raw.startswith(("http://", "https://", "file://")):
+        return raw, False
+    return f"https://{raw}", True
+
+
 def take_full_screenshot(
     input_source: str,
-    output_png: str,
+    output_png: str | Callable[[str], str],
     viewport_width: int = 1920,
-) -> None:
+) -> tuple[str, str]:
     """
     Render input_source to a full-page PNG using headless Chromium.
 
     Args:
-        input_source: A URL (http/https) or absolute path to a local .html file.
-        output_png:   Destination PNG file path (parent directories are created).
-        viewport_width: Browser viewport width in pixels (height is fixed at 1080
-                        — Playwright expands it automatically for full-page capture).
+        input_source:   A URL (http/https) or absolute path to a local .html file.
+                        Bare hostnames (e.g. "example.com") are auto-upgraded to
+                        https:// via _resolve_url.
+        output_png:     Destination PNG file path, OR a callable(page_title) -> path
+                        so the caller can embed the page title in the filename.
+        viewport_width: Browser viewport width in pixels (height is fixed at 1080;
+                        Playwright expands it for full-page capture).
+
+    Returns:
+        (page_title, final_output_path)
+        page_title is '' when the page has no <title> tag.
 
     Raises:
         Any Playwright exception propagates to the caller (GUI catches them).
     """
-    Path(output_png).parent.mkdir(parents=True, exist_ok=True)
+    # Normalise bare hostnames at the CLI entry point as well.
+    input_source, _ = _resolve_url(input_source)
 
     with sync_playwright() as p:
-        # Headless Chromium — identical rendering engine to Google Chrome.
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": viewport_width, "height": 1080},
@@ -48,7 +72,6 @@ def take_full_screenshot(
             if os.path.isfile(input_source) and input_source.lower().endswith(
                 (".html", ".htm")
             ):
-                # Local file → convert to file:// URL so Playwright can load it.
                 file_url = f"file://{Path(input_source).resolve().as_posix()}"
                 print(f"→ Loading local file: {file_url}")
                 page.goto(file_url, wait_until="networkidle", timeout=30_000)
@@ -56,18 +79,26 @@ def take_full_screenshot(
                 print(f"→ Loading URL: {input_source}")
                 page.goto(input_source, wait_until="networkidle", timeout=30_000)
         except PlaywrightTimeout:
-            # Partial loads are still worth screenshotting — warn but continue.
             print("⚠  Page load timed out; capturing what rendered so far…")
 
         # Scroll to the bottom so lazy-loaded images and JS finalise layout.
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(500)  # 500 ms settle time for final JS reflows
 
-        # full_page=True captures the entire scrollable document height.
-        page.screenshot(path=output_png, full_page=True)
-        print(f"✓ Screenshot saved: {output_png}")
+        # Resolve the output path — may depend on the page title.
+        page_title = page.title() or ""
+        if callable(output_png):
+            final_path = output_png(page_title)
+        else:
+            final_path = output_png
+
+        Path(final_path).parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=final_path, full_page=True)
+        print(f"✓ Screenshot saved: {final_path}")
 
         browser.close()
+
+    return page_title, final_path
 
 
 def main() -> None:
