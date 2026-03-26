@@ -334,9 +334,10 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         # ── State ──────────────────────────────────────────────────────────────
         self._config         = _load_config()
+        self._config.pop("output_path", None)   # remove legacy fixed-path override
         self._input_source   = tk.StringVar()   # URL or file path (Drop/URL tab)
         self._viewport_var   = tk.StringVar(value=DEFAULT_VIEWPORT)
-        self._saved_output   = tk.StringVar(value=self._config.get("output_path", ""))
+        self._saved_output   = tk.StringVar()   # session-only; cleared on relaunch
         self._worker_running = False             # Guard against double-triggers
         self._tmp_html_path: str | None = None  # Temp file for pasted HTML
 
@@ -613,9 +614,7 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         if path:
             self._saved_output.set(path)
-            self._config["output_path"] = path
-            _save_config(self._config)
-            self._log(f"Output path set: {path}")
+            self._log(f"Output override set (this session only): {path}")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self, self._config)
