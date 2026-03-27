@@ -1,6 +1,6 @@
 [build-system]
-requires      = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name            = "html-renderfriend"
@@ -39,11 +39,12 @@ htmlrf-screenshot = "screenshot:main"
 # [project.gui-scripts]
 # htmlrf = "htmlrf_gui:main"   # requires adding main() to htmlrf_gui.py
 
-[tool.setuptools.packages.find]
-# Only package the source files at the root; exclude venv and tests from the dist.
-where   = ["."]
-include = ["screenshot*", "htmlrf_gui*"]
-exclude = ["venv*", "tests*", "*.bat"]
+[tool.hatch.build.targets.wheel]
+# Only ship the two root-level modules; exclude venv, tests, and scripts from the dist.
+include = [
+  "screenshot.py",
+  "htmlrf_gui.py",
+]
 
 # ── PyInstaller notes ──────────────────────────────────────────────────────────
 # Build a single-file windowed EXE (Windows):
