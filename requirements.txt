@@ -1,4 +1,0 @@
-playwright>=1.50.0
-customtkinter>=5.2.2
-tkinterdnd2>=0.3.0
-darkdetect>=0.8.0

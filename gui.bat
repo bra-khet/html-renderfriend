@@ -3,4 +3,4 @@
 :: Double-click this file, or run it from any terminal.
 
 call venv\Scripts\activate
-python htmlrf_gui.py
+python -m htmlrf.gui

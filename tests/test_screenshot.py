@@ -5,16 +5,12 @@ and the public take_full_screenshot() interface.
 """
 
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-# Ensure the project root is importable when pytest is run from any directory.
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from screenshot import _resolve_url, take_full_screenshot
+from htmlrf.screenshot import _resolve_url, take_full_screenshot
 
 
 # ── _resolve_url ───────────────────────────────────────────────────────────────
@@ -126,7 +122,7 @@ class TestTakeFullScreenshot:
         out = str(tmp_path / "out.png")
         mock_sync, mock_page = self._make_playwright_mock("Hello World")
 
-        with patch("screenshot.sync_playwright", mock_sync):
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
             title, path = take_full_screenshot("https://example.com", out)
 
         assert title == "Hello World"
@@ -140,7 +136,7 @@ class TestTakeFullScreenshot:
             return str(tmp_path / f"{title}.png")
 
         mock_sync, _ = self._make_playwright_mock("My Page")
-        with patch("screenshot.sync_playwright", mock_sync):
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
             title, path = take_full_screenshot("https://example.com", resolver)
 
         assert received == ["My Page"]
@@ -152,7 +148,7 @@ class TestTakeFullScreenshot:
         out = str(tmp_path / "out.png")
 
         mock_sync, mock_page = self._make_playwright_mock()
-        with patch("screenshot.sync_playwright", mock_sync):
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
             take_full_screenshot(str(f), out)
 
         # The goto call should have received a file:/// URI, not a raw path.
@@ -166,7 +162,7 @@ class TestTakeFullScreenshot:
         out = str(tmp_path / "out.png")
         mock_sync, mock_page = self._make_playwright_mock()
 
-        with patch("screenshot.sync_playwright", mock_sync):
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
             take_full_screenshot("https://example.com", out, timeout_ms=5_000)
 
         goto_kwargs = mock_page.goto.call_args[1]
@@ -177,7 +173,7 @@ class TestTakeFullScreenshot:
         mock_sync, mock_page = self._make_playwright_mock("")
         mock_page.title.return_value = ""
 
-        with patch("screenshot.sync_playwright", mock_sync):
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
             title, _ = take_full_screenshot("https://example.com", out)
 
         assert title == ""

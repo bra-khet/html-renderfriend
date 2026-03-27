@@ -1,0 +1,23 @@
+{
+  "skill_name": "python-packager",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have a Python project called 'html-renderfriend' in a folder with screenshot.py, html2png_gui.py (CustomTkinter GUI), a requirements.txt listing playwright, customtkinter, and Pillow, plus some .bat files for launching. I want to make it pip-installable with both a CLI command 'renderfriend' and a GUI command 'renderfriend-gui'. Can you package this up properly?",
+      "expected_output": "Complete pyproject.toml with hatchling backend, src/ layout migration plan with all files moved under src/html_renderfriend/, CLI and GUI entry points pointing to main() functions, PEP 639 license syntax, dependency-groups for dev deps, and exact terminal commands to test. Should NOT generate setup.py.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I've got an old Python library with a setup.py that uses setuptools. It has a flat layout (package directory at root alongside setup.py), uses setup_requires for pytest-runner, and has License :: OSI Approved :: MIT License in classifiers. Help me modernize it to current standards.",
+      "expected_output": "Migration from setup.py to pyproject.toml, conversion to src/ layout, removal of setup_requires (deprecated), replacement of License classifier with PEP 639 license = {text = 'MIT'}, abstract dependency ranges for library use case, and explanation of why each change matters.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I want to create a brand new Python CLI tool from scratch called 'logwatcher' that monitors log files and sends alerts. It needs click for the CLI, watchdog for file monitoring, and requests for sending webhooks. I want dynamic versioning and I want to publish it on PyPI eventually. Set everything up for me.",
+      "expected_output": "Full project scaffold with src/ layout, hatchling backend with dynamic versioning from __about__.py, pyproject.toml with all deps, [project.scripts] entry point, dependency-groups for dev tools, README with installation instructions, and guidance on Trusted Publishing for PyPI.",
+      "files": []
+    }
+  ]
+}

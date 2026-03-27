@@ -22,9 +22,9 @@ if not exist venv\ (
 :: Activate venv
 call venv\Scripts\activate
 
-:: Install Python dependencies
+:: Install Python dependencies (editable install from pyproject.toml)
 echo [2/4] Installing Python packages...
-pip install --quiet -r requirements.txt
+pip install --quiet -e .
 
 :: Install Playwright's Chromium browser
 echo [3/4] Installing Playwright Chromium browser...
@@ -34,7 +34,7 @@ echo.
 echo [4/4] Done!  Run the app with one of:
 echo.
 echo        screenshot.bat "https://example.com" out.png     (CLI)
-echo        python screenshot.py --help                      (CLI help)
+echo        htmlrf-screenshot --help                         (CLI help)
 echo        gui.bat                                           (GUI)
 echo.
 pause

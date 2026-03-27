@@ -4,15 +4,11 @@ Validates _sanitize() and _resolve_filename() — the filename template engine.
 Covers the {seq} collision-check regression and Unicode/locale edge cases.
 """
 
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from htmlrf_gui import _sanitize, _resolve_filename, DEFAULT_TEMPLATE
+from htmlrf.gui import _sanitize, _resolve_filename, DEFAULT_TEMPLATE
 
 
 # ── _sanitize ─────────────────────────────────────────────────────────────────

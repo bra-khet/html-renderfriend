@@ -14,8 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 
 # ── Fixtures & helpers ────────────────────────────────────────────────────────
 
@@ -43,18 +41,18 @@ class TestDefaultOutputDir:
     """Runs without a display — pure path logic."""
 
     def test_returns_path_object(self):
-        from htmlrf_gui import _default_output_dir
+        from htmlrf.gui import _default_output_dir
         result = _default_output_dir()
         assert isinstance(result, Path)
 
     def test_returns_existing_directory(self):
-        from htmlrf_gui import _default_output_dir
+        from htmlrf.gui import _default_output_dir
         result = _default_output_dir()
         assert result.is_dir(), f"_default_output_dir() returned non-existent dir: {result}"
 
     def test_fallback_when_desktop_absent(self, tmp_path, monkeypatch):
         """When Desktop does not exist, should fall back to home."""
-        import htmlrf_gui
+        import htmlrf.gui as htmlrf_gui
         fake_home = tmp_path / "fakehome"
         fake_home.mkdir()
         # No Desktop subfolder — only home exists
@@ -63,7 +61,7 @@ class TestDefaultOutputDir:
         assert result == fake_home
 
     def test_uses_desktop_when_it_exists(self, tmp_path, monkeypatch):
-        import htmlrf_gui
+        import htmlrf.gui as htmlrf_gui
         fake_home = tmp_path / "fakehome"
         desktop   = fake_home / "Desktop"
         desktop.mkdir(parents=True)
@@ -78,7 +76,7 @@ class TestOpenFolder:
     """Runs without a display."""
 
     def test_windows_uses_startfile(self, tmp_path, monkeypatch):
-        import htmlrf_gui
+        import htmlrf.gui as htmlrf_gui
         monkeypatch.setattr(sys, "platform", "win32")
         calls = []
         monkeypatch.setattr(htmlrf_gui.os, "startfile", lambda p: calls.append(p),
@@ -88,7 +86,7 @@ class TestOpenFolder:
         assert calls == [str(tmp_path)]
 
     def test_macos_uses_open(self, tmp_path, monkeypatch):
-        import htmlrf_gui
+        import htmlrf.gui as htmlrf_gui
         monkeypatch.setattr(sys, "platform", "darwin")
         captured = []
         monkeypatch.setattr(
@@ -100,7 +98,7 @@ class TestOpenFolder:
         assert captured == [["open", str(tmp_path)]]
 
     def test_linux_uses_xdg_open(self, tmp_path, monkeypatch):
-        import htmlrf_gui
+        import htmlrf.gui as htmlrf_gui
         monkeypatch.setattr(sys, "platform", "linux")
         captured = []
         monkeypatch.setattr(
@@ -118,13 +116,13 @@ class TestSettingsDialogResult:
     """Validates the public result property without instantiating the dialog."""
 
     def test_result_property_exists(self):
-        from htmlrf_gui import SettingsDialog
+        from htmlrf.gui import SettingsDialog
         assert hasattr(SettingsDialog, "result"), (
             "SettingsDialog must expose a public 'result' property"
         )
 
     def test_result_property_is_property(self):
-        from htmlrf_gui import SettingsDialog
+        from htmlrf.gui import SettingsDialog
         assert isinstance(
             SettingsDialog.__dict__["result"], property
         ), "'result' must be a @property, not a plain attribute"
@@ -152,7 +150,7 @@ class TestAppSmoke:
             original_start(self_thread)
 
         with patch.object(threading.Thread, "start", mock_start):
-            import htmlrf_gui
+            import htmlrf.gui as htmlrf_gui
             app = htmlrf_gui.HTMLRenderFriendApp()
             app.after(0, app.quit)   # schedule immediate quit
             app.mainloop()

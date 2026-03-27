@@ -46,7 +46,7 @@ setup.bat
 ```powershell
 python -m venv venv
 venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 playwright install chromium
 ```
 
@@ -83,13 +83,13 @@ Output defaults to `Desktop/screenshot_<timestamp>.png`. Use **Save As…** to p
 venv\Scripts\activate
 
 # Remote URL
-python screenshot.py https://example.com -o example.png
+htmlrf-screenshot https://example.com -o example.png
 
 # Local HTML file
-python screenshot.py "C:\MyPages\report.html" -o report.png --width 1440
+htmlrf-screenshot "C:\MyPages\report.html" -o report.png --width 1440
 
 # See all options
-python screenshot.py --help
+htmlrf-screenshot --help
 ```
 
 **Drag-and-drop CLI:** drag an `.html` file onto `screenshot.bat` for an instant screenshot saved as `screenshot.png` in the same directory.
@@ -108,15 +108,18 @@ python screenshot.py --help
 
 ```
 html-renderfriend/
-├── screenshot.py       # Core CLI + take_full_screenshot() shared with GUI
-├── htmlrf_gui.py       # Drag-and-drop GUI (CustomTkinter + TkinterDnD2)
-├── pyproject.toml      # Build metadata and dependencies (hatchling)
-├── setup.bat           # One-click install script
-├── screenshot.bat      # CLI drag-and-drop wrapper
-├── gui.bat             # GUI launcher
-├── requirements.txt    # Python dependencies (mirrors pyproject.toml for setup.bat)
+├── src/
+│   └── htmlrf/
+│       ├── __init__.py
+│       ├── screenshot.py    # Core CLI + take_full_screenshot() shared with GUI
+│       └── gui.py           # Drag-and-drop GUI (CustomTkinter + TkinterDnD2)
+├── tests/
+├── pyproject.toml           # Build metadata and dependencies (hatchling)
+├── setup.bat                # One-click install script
+├── screenshot.bat           # CLI drag-and-drop wrapper
+├── gui.bat                  # GUI launcher
 ├── .gitignore
-├── LICENSE             # MIT
+├── LICENSE                  # MIT
 └── README.md
 ```
 
@@ -126,11 +129,11 @@ html-renderfriend/
 
 ```powershell
 pip install pyinstaller
-pyinstaller --onefile --windowed --name htmlrf_gui `
-    --add-data "screenshot.py;." htmlrf_gui.py
+pip install -e .
+pyinstaller --onefile --windowed --name htmlrf src/htmlrf/gui.py
 ```
 
-The resulting `dist\htmlrf_gui.exe` bundles everything except the Chromium browser, which Playwright downloads on first run.
+The resulting `dist\htmlrf.exe` bundles everything except the Chromium browser, which Playwright downloads on first run.
 
 ---
 

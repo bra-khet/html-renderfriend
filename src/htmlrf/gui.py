@@ -39,7 +39,9 @@ from urllib.parse import urlparse
 import customtkinter as ctk
 from tkinterdnd2 import TkinterDnD, DND_FILES
 
-from screenshot import take_full_screenshot, _resolve_url
+# CHANGED: absolute import updated for src/ layout migration
+# WHY: package is now htmlrf.screenshot, not a root-level module
+from htmlrf.screenshot import take_full_screenshot, _resolve_url
 
 _log = logging.getLogger(__name__)
 
@@ -1003,6 +1005,11 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().mainloop(n)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for [project.gui-scripts] — launched via `htmlrf` after install."""
     app = HTMLRenderFriendApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

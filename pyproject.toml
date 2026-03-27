@@ -1,5 +1,5 @@
 [build-system]
-requires      = ["hatchling"]
+requires      = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [project]
@@ -10,7 +10,6 @@ readme          = "README.md"
 license         = { file = "LICENSE" }
 requires-python = ">=3.11"
 
-# Runtime dependencies — keep in sync with requirements.txt
 dependencies = [
     "playwright>=1.50.0",
     "customtkinter>=5.2.2",
@@ -20,42 +19,33 @@ dependencies = [
     "darkdetect>=0.8.0",
 ]
 
-[project.optional-dependencies]
-# Development / testing
+[dependency-groups]
+# Development / testing — not included in published distributions
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
 
+[tool.hatch.build.targets.wheel]
+# Distribution name (html-renderfriend) differs from import name (htmlrf),
+# so hatchling needs an explicit pointer to the package directory.
+packages = ["src/htmlrf"]
+
 [project.scripts]
 # CLI entry point — allows `htmlrf-screenshot` after pip install
-htmlrf-screenshot = "screenshot:main"
+htmlrf-screenshot = "htmlrf.screenshot:main"
 
-# Note: the GUI (htmlrf_gui.py) is a Tkinter app; a console_scripts entry point
-# would show a terminal window on Windows. Prefer launching via gui.bat or
-# building a --windowed PyInstaller EXE (see README).  If you do want a script
-# entry point, use [project.gui-scripts] instead:
-#
-# [project.gui-scripts]
-# htmlrf = "htmlrf_gui:main"   # requires adding main() to htmlrf_gui.py
-
-[tool.hatch.build.targets.wheel]
-# Only ship the two root-level modules; exclude venv, tests, and scripts from the dist.
-include = [
-  "screenshot.py",
-  "htmlrf_gui.py",
-]
+[project.gui-scripts]
+# GUI entry point — windowed launcher (no console window on Windows)
+htmlrf = "htmlrf.gui:main"
 
 # ── PyInstaller notes ──────────────────────────────────────────────────────────
+# Install the package first so PyInstaller can trace the htmlrf package:
+#   pip install -e .
+#   pip install pyinstaller
+#
 # Build a single-file windowed EXE (Windows):
-#
-#   pyinstaller --onefile --windowed --name htmlrf_gui \
-#       --add-data "screenshot.py;."  htmlrf_gui.py
-#
-# On macOS / Linux replace the ";" separator with ":" (os.pathsep):
-#
-#   pyinstaller --onefile --windowed --name htmlrf_gui \
-#       --add-data "screenshot.py:."  htmlrf_gui.py
+#   pyinstaller --onefile --windowed --name htmlrf src/htmlrf/gui.py
 #
 # Playwright's Chromium is NOT bundled — it is downloaded separately via:
 #   playwright install chromium

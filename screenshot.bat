@@ -14,6 +14,6 @@ if "%~2"=="" (
     set OUTPUT=%~2
 )
 
-python screenshot.py %1 -o "%OUTPUT%" %3 %4 %5
+htmlrf-screenshot %1 -o "%OUTPUT%" %3 %4 %5
 echo.
 pause
