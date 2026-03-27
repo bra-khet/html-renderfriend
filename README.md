@@ -109,7 +109,7 @@ python screenshot.py --help
 ```
 html-renderfriend/
 ├── screenshot.py       # Core CLI + take_full_screenshot() shared with GUI
-├── html2png_gui.py     # Drag-and-drop GUI (CustomTkinter + TkinterDnD2)
+├── htmlrf_gui.py       # Drag-and-drop GUI (CustomTkinter + TkinterDnD2)
 ├── setup.bat           # One-click install script
 ├── screenshot.bat      # CLI drag-and-drop wrapper
 ├── gui.bat             # GUI launcher
@@ -125,11 +125,11 @@ html-renderfriend/
 
 ```powershell
 pip install pyinstaller
-pyinstaller --onefile --windowed --name html2png_gui `
-    --add-data "screenshot.py;." html2png_gui.py
+pyinstaller --onefile --windowed --name htmlrf_gui `
+    --add-data "screenshot.py;." htmlrf_gui.py
 ```
 
-The resulting `dist\html2png_gui.exe` bundles everything except the Chromium browser, which Playwright downloads on first run.
+The resulting `dist\htmlrf_gui.exe` bundles everything except the Chromium browser, which Playwright downloads on first run.
 
 ---
 

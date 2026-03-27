@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-html2png_gui.py — Drag-and-drop GUI for the HTML → PNG screenshotter.
+htmlrf_gui.py — Drag-and-drop GUI for the HTML → PNG screenshotter.
 
 How to test:
-    1.  Run:            python html2png_gui.py
+    1.  Run:            python htmlrf_gui.py
     2.  Drag an .html file onto the drop zone — screenshot fires automatically.
     3.  Or type/paste a URL into the entry field → click Screenshot.
     4.  Or switch to the "Paste HTML" tab, paste raw markup, click Screenshot.
@@ -15,8 +15,8 @@ Dependencies (install once):
     playwright install chromium
 
 PyInstaller single-file EXE (run from project root after pip install pyinstaller):
-    pyinstaller --onefile --windowed --name html2png_gui \
-        --add-data "screenshot.py;." html2png_gui.py
+    pyinstaller --onefile --windowed --name htmlrf_gui \
+        --add-data "screenshot.py;." htmlrf_gui.py
 """
 
 import json
@@ -48,7 +48,7 @@ VIEWPORT_OPTIONS = ["1280", "1440", "1920", "2560"]
 DEFAULT_VIEWPORT = "1920"
 
 # ── Config persistence ─────────────────────────────────────────────────────────
-_CONFIG_PATH = Path.home() / ".html2png_config.json"
+_CONFIG_PATH = Path.home() / ".htmlrf_config.json"
 
 
 def _load_config() -> dict:
@@ -308,7 +308,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
 # ── Main application window ────────────────────────────────────────────────────
 
-class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
+class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     """
     Dual-inherits CTk (CustomTkinter themed window) + TkinterDnD.DnDWrapper so
     that Windows-native OLE drag-and-drop works alongside CTk theming.
@@ -327,7 +327,7 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("HTML2PNG • Full-Page Screenshotter v1.0")
+        self.title("HTML Renderfriend • Full-Page Screenshotter v1.0")
         self.geometry("800x660")
         self.resizable(True, True)
         self.minsize(700, 560)
@@ -365,7 +365,7 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkLabel(
             bar,
-            text="HTML2PNG  •  Full-Page Screenshotter",
+            text="HTML Renderfriend  •  Full-Page Screenshotter",
             font=ctk.CTkFont("Segoe UI", 16, "bold"),
         ).grid(row=0, column=0, sticky="w")
 
@@ -804,5 +804,5 @@ class HTML2PNGApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
 
 if __name__ == "__main__":
-    app = HTML2PNGApp()
+    app = HTMLRenderFriendApp()
     app.mainloop()
