@@ -10,11 +10,17 @@ Core function take_full_screenshot() is imported by the GUI as well.
 """
 
 import argparse
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+# CHANGED: use module-level logger instead of bare print()
+# WHY: print() is silently swallowed in --windowed PyInstaller builds; logging
+#      lets callers (GUI, tests) route messages to their own handlers.
+_log = logging.getLogger(__name__)
 
 
 def _resolve_url(raw: str) -> tuple[str, bool]:
@@ -37,6 +43,8 @@ def take_full_screenshot(
     input_source: str,
     output_png: str | Callable[[str], str],
     viewport_width: int = 1920,
+    *,
+    timeout_ms: int = 30_000,
 ) -> tuple[str, str]:
     """
     Render input_source to a full-page PNG using headless Chromium.
@@ -49,6 +57,8 @@ def take_full_screenshot(
                         so the caller can embed the page title in the filename.
         viewport_width: Browser viewport width in pixels (height is fixed at 1080;
                         Playwright expands it for full-page capture).
+        timeout_ms:     Navigation timeout in milliseconds (default 30 000).
+                        Keyword-only to prevent accidental positional misuse.
 
     Returns:
         (page_title, final_output_path)
@@ -72,18 +82,34 @@ def take_full_screenshot(
             if os.path.isfile(input_source) and input_source.lower().endswith(
                 (".html", ".htm")
             ):
-                file_url = f"file://{Path(input_source).resolve().as_posix()}"
-                print(f"→ Loading local file: {file_url}")
-                page.goto(file_url, wait_until="networkidle", timeout=30_000)
+                # CHANGED: use Path.as_uri() instead of f"file://{path.as_posix()}"
+                # WHY: BUG FIX — on Windows, as_posix() gives "C:/path/file.html" so
+                #      the manual f-string produced "file://C:/..." (missing leading /)
+                #      while the correct URI is "file:///C:/...".  Path.as_uri() is
+                #      platform-correct on all OSes.
+                # BUG FIX: windows-file-uri-missing-slash
+                # Fix: replaced f"file://{path.as_posix()}" with Path.as_uri()
+                file_url = Path(input_source).resolve().as_uri()
+                _log.info("Loading local file: %s", file_url)
+                page.goto(file_url, wait_until="networkidle", timeout=timeout_ms)
             else:
-                print(f"→ Loading URL: {input_source}")
-                page.goto(input_source, wait_until="networkidle", timeout=30_000)
+                _log.info("Loading URL: %s", input_source)
+                page.goto(input_source, wait_until="networkidle", timeout=timeout_ms)
         except PlaywrightTimeout:
-            print("⚠  Page load timed out; capturing what rendered so far…")
+            _log.warning("Page load timed out; capturing what rendered so far")
 
         # Scroll to the bottom so lazy-loaded images and JS finalise layout.
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(500)  # 500 ms settle time for final JS reflows
+        # CHANGED: replace unconditional 500 ms sleep with a shorter settle wait
+        # after confirming readyState, falling back to a fixed 300 ms cap.
+        # WHY: fast local pages paid the full 500 ms penalty unconditionally;
+        #      checking readyState gives an early exit on already-settled pages.
+        try:
+            page.wait_for_function(
+                "document.readyState === 'complete'", timeout=300
+            )
+        except PlaywrightTimeout:
+            pass  # page already timed out once; capture whatever we have
 
         # Resolve the output path — may depend on the page title.
         page_title = page.title() or ""
@@ -94,7 +120,7 @@ def take_full_screenshot(
 
         Path(final_path).parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=final_path, full_page=True)
-        print(f"✓ Screenshot saved: {final_path}")
+        _log.info("Screenshot saved: %s", final_path)
 
         browser.close()
 
@@ -102,6 +128,14 @@ def take_full_screenshot(
 
 
 def main() -> None:
+    # CHANGED: configure logging for the CLI so _log calls produce visible output
+    # WHY: without basicConfig the root logger has no handlers and all messages
+    #      are silently discarded when running as a CLI script.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
     parser = argparse.ArgumentParser(
         prog="screenshot",
         description="Full-page HTML/URL → PNG screenshot utility (scroll-captured)",
@@ -129,8 +163,15 @@ def main() -> None:
         metavar="{1280,1440,1920,2560}",
         help="Viewport width in pixels (default: 1920)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30_000,
+        metavar="MS",
+        help="Navigation timeout in milliseconds (default: 30000)",
+    )
     args = parser.parse_args()
-    take_full_screenshot(args.input, args.output, args.width)
+    take_full_screenshot(args.input, args.output, args.width, timeout_ms=args.timeout)
 
 
 if __name__ == "__main__":

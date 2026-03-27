@@ -1,0 +1,60 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name            = "html-renderfriend"
+version         = "1.0.0"
+description     = "Full-page HTML/URL to PNG screenshotter — CLI + drag-and-drop GUI"
+readme          = "README.md"
+license         = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+# Runtime dependencies — keep in sync with requirements.txt
+dependencies = [
+    "playwright>=1.50.0",
+    "customtkinter>=5.2.2",
+    # tkinterdnd2: Windows-native OLE drag-and-drop bridge for Tkinter
+    "tkinterdnd2>=0.3.0",
+    # darkdetect: OS dark/light theme detection (also a transitive dep of customtkinter)
+    "darkdetect>=0.8.0",
+]
+
+[project.optional-dependencies]
+# Development / testing
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+]
+
+[project.scripts]
+# CLI entry point — allows `htmlrf-screenshot` after pip install
+htmlrf-screenshot = "screenshot:main"
+
+# Note: the GUI (htmlrf_gui.py) is a Tkinter app; a console_scripts entry point
+# would show a terminal window on Windows. Prefer launching via gui.bat or
+# building a --windowed PyInstaller EXE (see README).  If you do want a script
+# entry point, use [project.gui-scripts] instead:
+#
+# [project.gui-scripts]
+# htmlrf = "htmlrf_gui:main"   # requires adding main() to htmlrf_gui.py
+
+[tool.setuptools.packages.find]
+# Only package the source files at the root; exclude venv and tests from the dist.
+where   = ["."]
+include = ["screenshot*", "htmlrf_gui*"]
+exclude = ["venv*", "tests*", "*.bat"]
+
+# ── PyInstaller notes ──────────────────────────────────────────────────────────
+# Build a single-file windowed EXE (Windows):
+#
+#   pyinstaller --onefile --windowed --name htmlrf_gui \
+#       --add-data "screenshot.py;."  htmlrf_gui.py
+#
+# On macOS / Linux replace the ";" separator with ":" (os.pathsep):
+#
+#   pyinstaller --onefile --windowed --name htmlrf_gui \
+#       --add-data "screenshot.py:."  htmlrf_gui.py
+#
+# Playwright's Chromium is NOT bundled — it is downloaded separately via:
+#   playwright install chromium

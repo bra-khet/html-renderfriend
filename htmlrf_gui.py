@@ -16,12 +16,17 @@ Dependencies (install once):
 
 PyInstaller single-file EXE (run from project root after pip install pyinstaller):
     pyinstaller --onefile --windowed --name htmlrf_gui \
-        --add-data "screenshot.py;." htmlrf_gui.py
+        --add-data "screenshot.py{sep}." htmlrf_gui.py
+    # {sep} is ";" on Windows and ":" on macOS/Linux (os.pathsep)
 """
 
 import json
+import logging
 import os
+import platform
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 import time as _time
@@ -36,6 +41,24 @@ from tkinterdnd2 import TkinterDnD, DND_FILES
 
 from screenshot import take_full_screenshot, _resolve_url
 
+_log = logging.getLogger(__name__)
+
+# ── Platform-adaptive font tokens ──────────────────────────────────────────────
+# CHANGED: replace hardcoded "Segoe UI" / "Cascadia Code" with per-OS fallbacks
+# WHY: those fonts are Windows-only; macOS and Linux would silently fall back to
+#      an arbitrary system font, producing inconsistent UI on non-Windows builds.
+_SYSTEM    = platform.system()   # "Windows" | "Darwin" | "Linux"
+_FONT_BODY = (
+    "Segoe UI"      if _SYSTEM == "Windows" else
+    "SF Pro Text"   if _SYSTEM == "Darwin"  else
+    "Ubuntu"
+)
+_FONT_MONO = (
+    "Cascadia Code" if _SYSTEM == "Windows" else
+    "SF Mono"       if _SYSTEM == "Darwin"  else
+    "DejaVu Sans Mono"
+)
+
 # ── Design tokens ──────────────────────────────────────────────────────────────
 _ACCENT       = "#00ffaa"
 _ACCENT_HOVER = "#00cc88"
@@ -46,6 +69,21 @@ _DROP_HOT     = "#0d2a1c"
 
 VIEWPORT_OPTIONS = ["1280", "1440", "1920", "2560"]
 DEFAULT_VIEWPORT = "1920"
+
+# Log pane: trim to this many lines to prevent unbounded memory growth.
+# CHANGED: add line cap for the log textbox
+# WHY: in long sessions (batch use, repeat renders) the log grew without bound.
+_MAX_LOG_LINES = 400
+
+# ── System theme detection ─────────────────────────────────────────────────────
+# CHANGED: detect OS dark/light preference instead of hardcoding dark mode
+# WHY: users on light-mode systems were forced into dark mode on every launch.
+try:
+    import darkdetect as _dd
+    _INITIAL_DARK: bool = _dd.isDark() is not False   # None → assume dark
+except ImportError:
+    _INITIAL_DARK = True
+
 
 # ── Config persistence ─────────────────────────────────────────────────────────
 _CONFIG_PATH = Path.home() / ".htmlrf_config.json"
@@ -60,6 +98,37 @@ def _load_config() -> dict:
 
 def _save_config(data: dict) -> None:
     _CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# ── Cross-platform output directory default ────────────────────────────────────
+# CHANGED: replace bare Path.home() / "Desktop" with a helper that checks
+#          whether Desktop actually exists.
+# WHY: on many Linux distros the Desktop folder does not exist by default;
+#      writing to a non-existent directory raises FileNotFoundError at runtime.
+def _default_output_dir() -> Path:
+    desktop = Path.home() / "Desktop"
+    return desktop if desktop.is_dir() else Path.home()
+
+
+# ── Cross-platform folder opener ───────────────────────────────────────────────
+# CHANGED: replace os.startfile() with a platform-dispatching helper
+# WHY: os.startfile is Windows-only; calling it on macOS/Linux raises AttributeError.
+def _open_folder(path: str | Path) -> None:
+    folder = str(Path(path).parent)
+    if sys.platform == "win32":
+        os.startfile(folder)           # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", folder])
+    else:
+        subprocess.Popen(["xdg-open", folder])
+
+
+# ── Local-time helper (single call-site for tz awareness) ─────────────────────
+# CHANGED: centralise datetime.now() into one helper
+# WHY: all callers use local-naive time today; if tz-aware output is later needed
+#      (e.g. UTC filenames for server deployments) this is the only place to change.
+def _now() -> datetime:
+    return datetime.now()
 
 
 # ── Filename template engine ───────────────────────────────────────────────────
@@ -100,7 +169,7 @@ def _resolve_filename(
     Expand template variables into a concrete filename (with .png extension).
     Handles {seq} by scanning output_dir for collisions.
     """
-    now = datetime.now()
+    now = _now()
 
     if os.path.isfile(source):
         name   = Path(source).stem
@@ -134,10 +203,21 @@ def _resolve_filename(
 
     # {seq} — find next non-colliding sequence number
     if "{seq}" in stem:
-        base = stem.replace("{seq}", "")
-        seq  = 1
+        seq = 1
         if output_dir:
-            while Path(output_dir, f"{base}{seq:03d}.png").exists():
+            # CHANGED: construct the candidate filename the same way the final
+            #          name is built (via _sanitize on the full stem with {seq}
+            #          already substituted), rather than using base+seq concatenation.
+            # WHY: BUG FIX — when {seq} appears anywhere except the end of the
+            #      template, "base + seq_formatted" produced a different string
+            #      than "stem.replace({seq}, seq_formatted)", so the collision
+            #      check tested the wrong file and seq always returned 001.
+            # BUG FIX: seq-collision-check-wrong-filename
+            # Fix: replaced f"{base}{seq:03d}.png" with _sanitize(stem.replace(...))
+            while Path(
+                output_dir,
+                _sanitize(stem.replace("{seq}", f"{seq:03d}")) + ".png",
+            ).exists():
                 seq += 1
         stem = stem.replace("{seq}", f"{seq:03d}")
 
@@ -163,7 +243,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.focus_set()
 
         self._dir_var  = tk.StringVar(
-            value=config.get("output_dir", str(Path.home() / "Desktop"))
+            value=config.get("output_dir", str(_default_output_dir()))
         )
         self._tmpl_var = tk.StringVar(
             value=config.get("filename_template", DEFAULT_TEMPLATE)
@@ -175,6 +255,14 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.wait_window(self)   # block caller until dialog closes
 
+    # CHANGED: expose _result via a public property
+    # WHY: the parent accessed self._result directly (private attribute from
+    #      outside the class), which tightly couples the two classes and will
+    #      silently break if the attribute is renamed internally.
+    @property
+    def result(self) -> dict | None:
+        return self._result
+
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
 
@@ -185,7 +273,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             s1, text="Output Directory",
-            font=ctk.CTkFont("Segoe UI", 12, "bold"), anchor="w",
+            font=ctk.CTkFont(_FONT_BODY, 12, "bold"), anchor="w",
         ).grid(row=0, column=0, columnspan=2, sticky="w")
 
         ctk.CTkEntry(
@@ -204,22 +292,22 @@ class SettingsDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             s2, text="Filename Template",
-            font=ctk.CTkFont("Segoe UI", 12, "bold"), anchor="w",
+            font=ctk.CTkFont(_FONT_BODY, 12, "bold"), anchor="w",
         ).grid(row=0, column=0, sticky="w")
 
         ctk.CTkLabel(
             s2, text="Use {variables} below — .png is appended automatically.",
-            font=ctk.CTkFont("Segoe UI", 10), text_color="gray", anchor="w",
+            font=ctk.CTkFont(_FONT_BODY, 10), text_color="gray", anchor="w",
         ).grid(row=1, column=0, sticky="w")
 
         ctk.CTkEntry(
             s2, textvariable=self._tmpl_var,
-            font=ctk.CTkFont("Cascadia Code", 12), height=34,
+            font=ctk.CTkFont(_FONT_MONO, 12), height=34,
         ).grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         self._preview_label = ctk.CTkLabel(
             s2, text="", anchor="w",
-            font=ctk.CTkFont("Cascadia Code", 10), text_color="gray",
+            font=ctk.CTkFont(_FONT_MONO, 10), text_color="gray",
         )
         self._preview_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
@@ -230,24 +318,24 @@ class SettingsDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             s3, text="Available Variables",
-            font=ctk.CTkFont("Segoe UI", 11, "bold"), anchor="w",
+            font=ctk.CTkFont(_FONT_BODY, 11, "bold"), anchor="w",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 2))
 
         for i, (token, desc, example) in enumerate(_TEMPLATE_VARS):
             row_bg = "#1e1e1e" if i % 2 == 0 else "transparent"
             ctk.CTkLabel(
                 s3, text=token,
-                font=ctk.CTkFont("Cascadia Code", 11), text_color=_ACCENT,
+                font=ctk.CTkFont(_FONT_MONO, 11), text_color=_ACCENT,
                 fg_color=row_bg, anchor="w",
             ).grid(row=i + 1, column=0, sticky="ew", padx=(10, 8), pady=1)
             ctk.CTkLabel(
                 s3, text=desc,
-                font=ctk.CTkFont("Segoe UI", 11),
+                font=ctk.CTkFont(_FONT_BODY, 11),
                 fg_color=row_bg, anchor="w",
             ).grid(row=i + 1, column=1, sticky="ew", pady=1)
             ctk.CTkLabel(
                 s3, text=example,
-                font=ctk.CTkFont("Cascadia Code", 10), text_color="gray",
+                font=ctk.CTkFont(_FONT_MONO, 10), text_color="gray",
                 fg_color=row_bg, anchor="e",
             ).grid(row=i + 1, column=2, sticky="e", padx=(8, 10), pady=1)
 
@@ -264,7 +352,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkButton(
             btns, text="Save",
             width=90, fg_color=_ACCENT, hover_color=_ACCENT_HOVER,
-            text_color="#000000", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            text_color="#000000", font=ctk.CTkFont(_FONT_BODY, 12, "bold"),
             command=self._save,
         ).pack(side="right")
 
@@ -277,7 +365,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def _browse_dir(self) -> None:
         d = filedialog.askdirectory(
             title="Select default output directory",
-            initialdir=self._dir_var.get() or str(Path.home() / "Desktop"),
+            initialdir=self._dir_var.get() or str(_default_output_dir()),
             parent=self,
         )
         if d:
@@ -292,7 +380,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _reset(self) -> None:
         self._tmpl_var.set(DEFAULT_TEMPLATE)
-        self._dir_var.set(str(Path.home() / "Desktop"))
+        self._dir_var.set(str(_default_output_dir()))
 
     def _save(self) -> None:
         d = self._dir_var.get().strip()
@@ -324,7 +412,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__()
         self.TkdndVersion = TkinterDnD._require(self)
 
-        ctk.set_appearance_mode("dark")
+        # CHANGED: use "system" appearance mode so the app respects the OS theme
+        # WHY: hardcoded "dark" forced dark mode on every launch regardless of the
+        #      user's OS light/dark preference — friction for light-mode users.
+        ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
         self.title("HTML Renderfriend • Full-Page Screenshotter v1.0")
@@ -344,6 +435,29 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build_ui()
         self._bind_shortcuts()
         self._log("Ready — drop a file, enter a URL, or paste HTML.")
+
+        # CHANGED: run a background Playwright health check at startup
+        # WHY: without this, a missing Chromium installation only surfaces as a
+        #      cryptic Playwright error after the user triggers their first render.
+        threading.Thread(target=self._startup_health_check, daemon=True).start()
+
+    # ── Startup health check ───────────────────────────────────────────────────
+
+    def _startup_health_check(self) -> None:
+        """Background check: warn early if Chromium is not installed."""
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                if not Path(pw.chromium.executable_path).exists():
+                    self.after(0, lambda: self._log(
+                        "⚠  Chromium not found — run: playwright install chromium"
+                    ))
+        except ImportError:
+            self.after(0, lambda: self._log(
+                "⚠  Playwright not installed — run: pip install playwright"
+            ))
+        except Exception:
+            pass   # Will fail loudly on first render attempt with a clear error
 
     # ── UI construction ────────────────────────────────────────────────────────
 
@@ -382,7 +496,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(
             bar,
             text="HTML Renderfriend  •  Full-Page Screenshotter",
-            font=ctk.CTkFont("Segoe UI", 16, "bold"),
+            font=ctk.CTkFont(_FONT_BODY, 16, "bold"),
         ).grid(row=0, column=0, sticky="w")
 
         self._theme_switch = ctk.CTkSwitch(
@@ -392,7 +506,14 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             offvalue="light",
             command=self._toggle_theme,
         )
-        self._theme_switch.select()
+        # CHANGED: sync initial switch state to the detected OS theme
+        # WHY: with "system" appearance mode the switch label would say "Dark mode"
+        #      while the app was actually running in light mode on light-mode systems.
+        if _INITIAL_DARK:
+            self._theme_switch.select()
+        else:
+            self._theme_switch.deselect()
+            self._theme_switch.configure(text="Light mode")
         self._theme_switch.grid(row=0, column=1, sticky="e")
 
     def _build_tabs(self, row: int) -> None:
@@ -425,7 +546,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._drop_label = ctk.CTkLabel(
             self._drop_frame,
             text="DROP  .html  FILE  HERE",
-            font=ctk.CTkFont("Segoe UI", 19, "bold"),
+            font=ctk.CTkFont(_FONT_BODY, 19, "bold"),
             text_color=_ACCENT,
         )
         self._drop_label.grid(row=0, column=0)
@@ -462,13 +583,13 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             parent,
             text="Paste raw HTML below, then click Screenshot:",
             anchor="w",
-            font=ctk.CTkFont("Segoe UI", 12),
+            font=ctk.CTkFont(_FONT_BODY, 12),
         ).grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self._html_box = ctk.CTkTextbox(
             parent,
             height=178,
-            font=ctk.CTkFont("Cascadia Code", 11),
+            font=ctk.CTkFont(_FONT_MONO, 11),
             wrap="none",
         )
         self._html_box.grid(row=1, column=0, sticky="nsew")
@@ -490,7 +611,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             fg_color=_ACCENT,
             hover_color=_ACCENT_HOVER,
             text_color="#000000",
-            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+            font=ctk.CTkFont(_FONT_BODY, 13, "bold"),
             command=self._trigger_screenshot,
         ).pack(side="left", padx=(0, 16))
 
@@ -534,13 +655,13 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(
             frame, text="Log",
             anchor="w",
-            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            font=ctk.CTkFont(_FONT_BODY, 11, "bold"),
         ).grid(row=0, column=0, sticky="w", padx=8, pady=(4, 0))
 
         self._log_box = ctk.CTkTextbox(
             frame,
             height=120,
-            font=ctk.CTkFont("Cascadia Code", 10),
+            font=ctk.CTkFont(_FONT_MONO, 10),
             state="disabled",
         )
         self._log_box.grid(row=1, column=0, sticky="nsew", padx=4, pady=(2, 4))
@@ -554,7 +675,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             bar,
             text="Ready.",
             anchor="w",
-            font=ctk.CTkFont("Segoe UI", 11),
+            font=ctk.CTkFont(_FONT_BODY, 11),
             text_color="gray",
         )
         self._status_label.grid(row=0, column=0, sticky="w")
@@ -573,7 +694,17 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _bind_shortcuts(self) -> None:
         self.bind("<Control-s>", lambda _: self._trigger_screenshot())
         self.bind("<Control-d>", self._paste_clipboard)
-        self.bind("<Escape>",    lambda _: self.quit())
+        # CHANGED: Escape now checks whether a render is in progress before quitting
+        # WHY: previously Escape quit unconditionally mid-render, leaving orphaned
+        #      temp files and giving no user feedback about the abrupt termination.
+        self.bind("<Escape>",    self._on_escape)
+
+    def _on_escape(self, _event: object = None) -> None:
+        if self._worker_running:
+            self._log("Render in progress — press Escape again or wait for it to finish.")
+            self.bind("<Escape>", lambda _: self.quit())   # second press quits
+        else:
+            self.quit()
 
     # ── Drag-and-drop handlers ─────────────────────────────────────────────────
 
@@ -585,7 +716,28 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._reset_drop_zone()
 
     def _on_drop(self, event: tk.Event) -> None:  # type: ignore[type-arg]
-        raw = event.data.strip().lstrip("{").rstrip("}")
+        # CHANGED: use self.tk.splitlist() to parse the Tcl file-list correctly
+        # WHY: BUG FIX — the previous lstrip("{")/rstrip("}") approach failed for
+        #      multiple files (e.g. "{path1} {path2}") and for single paths with
+        #      spaces wrapped in braces by TkinterDnD2.  splitlist() is the correct
+        #      Tcl-list parser that handles all quoting/bracing edge cases.
+        # BUG FIX: multi-file-drop-parsing
+        # Fix: replaced manual lstrip/rstrip with self.tk.splitlist(event.data)
+        try:
+            paths = self.tk.splitlist(event.data)
+        except tk.TclError:
+            paths = [event.data.strip()]
+
+        if not paths:
+            self._reset_drop_zone()
+            return
+
+        if len(paths) > 1:
+            self._log(
+                f"Multiple files dropped — using first of {len(paths)}: {paths[0]}"
+            )
+
+        raw = paths[0]
         self._input_source.set(raw)
         self._reset_drop_zone()
         self._tabview.set("Drop / URL")
@@ -634,8 +786,8 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             title="Save screenshot as…",
             defaultextension=".png",
             filetypes=[("PNG image", "*.png")],
-            initialdir=self._config.get("output_dir", str(Path.home() / "Desktop")),
-            initialfile=f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png",
+            initialdir=self._config.get("output_dir", str(_default_output_dir())),
+            initialfile=f"screenshot_{_now():%Y%m%d_%H%M%S}.png",
         )
         if path:
             self._saved_output.set(path)
@@ -643,13 +795,15 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self, self._config)
-        if dlg._result:
-            self._config.update(dlg._result)
+        # CHANGED: access result via the public property instead of _result
+        # WHY: avoids cross-class private-attribute coupling; see SettingsDialog.result
+        if dlg.result:
+            self._config.update(dlg.result)
             _save_config(self._config)
             self._log(
                 f"Settings saved — "
-                f"dir: {dlg._result['output_dir']}  "
-                f"template: {dlg._result['filename_template']}"
+                f"dir: {dlg.result['output_dir']}  "
+                f"template: {dlg.result['filename_template']}"
             )
 
     # ── Screenshot orchestration ───────────────────────────────────────────────
@@ -693,7 +847,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             # Save As override — use the exact path regardless of template.
             output_resolver = lambda _title: fixed
         else:
-            output_dir = self._config.get("output_dir", str(Path.home() / "Desktop"))
+            output_dir = self._config.get("output_dir", str(_default_output_dir()))
             template   = self._config.get("filename_template", DEFAULT_TEMPLATE)
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -792,6 +946,8 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # next render uses the template from Settings instead of repeating this
         # exact path. See _choose_output docstring for the sync contract.
         self._saved_output.set("")
+        # Re-arm the single-press Escape guard (cleared on error path too).
+        self.bind("<Escape>", self._on_escape)
         self._log(f"✓  Saved: {output}")
         self._status_label.configure(text=f"Saved → {output}", text_color=_ACCENT)
         self._open_folder_btn.configure(state="normal")
@@ -801,6 +957,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # BUG FIX (stale-output): also clear on error so a failed render does
         # not silently consume the Save-As override, leaving it stale.
         self._saved_output.set("")
+        self.bind("<Escape>", self._on_escape)
         self._log(f"✗  Error: {message}")
         self._status_label.configure(text="Error — see log.", text_color="#ff5555")
         self._drop_frame.configure(border_color="#ff5555")
@@ -820,16 +977,27 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._progress.set(0)
 
     def _log(self, message: str) -> None:
-        ts   = datetime.now().strftime("%H:%M:%S")
+        ts   = _now().strftime("%H:%M:%S")
         line = f"[{ts}]  {message}\n"
         self._log_box.configure(state="normal")
         self._log_box.insert("end", line)
+
+        # CHANGED: trim the log pane to _MAX_LOG_LINES to cap memory usage
+        # WHY: in long sessions or repeat renders the textbox grew without bound,
+        #      consuming memory and slowing down text-widget redraws.
+        line_count = int(self._log_box.index("end-1c").split(".")[0])
+        if line_count > _MAX_LOG_LINES:
+            excess = line_count - _MAX_LOG_LINES
+            self._log_box.delete("1.0", f"{excess + 1}.0")
+
         self._log_box.see("end")
         self._log_box.configure(state="disabled")
 
     def _open_output_folder(self) -> None:
-        folder = str(Path(self._last_output).parent)
-        os.startfile(folder)
+        # CHANGED: use _open_folder() instead of os.startfile()
+        # WHY: os.startfile is Windows-only; _open_folder dispatches to the
+        #      correct platform command (open on macOS, xdg-open on Linux).
+        _open_folder(self._last_output)
 
     def mainloop(self, n: int = 0) -> None:  # type: ignore[override]
         super().mainloop(n)
