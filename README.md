@@ -110,10 +110,11 @@ python screenshot.py --help
 html-renderfriend/
 ├── screenshot.py       # Core CLI + take_full_screenshot() shared with GUI
 ├── htmlrf_gui.py       # Drag-and-drop GUI (CustomTkinter + TkinterDnD2)
+├── pyproject.toml      # Build metadata and dependencies (hatchling)
 ├── setup.bat           # One-click install script
 ├── screenshot.bat      # CLI drag-and-drop wrapper
 ├── gui.bat             # GUI launcher
-├── requirements.txt    # Python dependencies
+├── requirements.txt    # Python dependencies (mirrors pyproject.toml for setup.bat)
 ├── .gitignore
 ├── LICENSE             # MIT
 └── README.md
@@ -148,4 +149,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Last updated: March 22, 2026*
+*Last updated: March 26, 2026*
