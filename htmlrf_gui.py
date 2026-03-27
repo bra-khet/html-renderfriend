@@ -348,8 +348,24 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Root window holds only the bezel frame — one grid cell, fills all space.
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # ── Bezel / decorative border ──────────────────────────────────────────
+        # A bordered inner frame gives a clean inset look and visually extends
+        # the native resize-grab area around the window edges (padx/y 5 px).
+        # Performance note: corner_radius=0 avoids per-frame anti-alias math,
+        # which is the largest CTK contributor to resize lag.
+        self._main_frame = ctk.CTkFrame(
+            self,
+            border_width=2,
+            border_color=_BORDER_IDLE,
+            corner_radius=0,
+        )
+        self._main_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self._main_frame.grid_columnconfigure(0, weight=1)
+        self._main_frame.grid_rowconfigure(4, weight=1, minsize=80)
 
         self._build_topbar(row=0)
         self._build_tabs(row=1)
@@ -359,7 +375,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build_statusbar(row=5)
 
     def _build_topbar(self, row: int) -> None:
-        bar = ctk.CTkFrame(self, fg_color="transparent", height=44)
+        bar = ctk.CTkFrame(self._main_frame, fg_color="transparent", height=44)
         bar.grid(row=row, column=0, sticky="ew", padx=16, pady=(12, 0))
         bar.grid_columnconfigure(0, weight=1)
 
@@ -380,7 +396,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._theme_switch.grid(row=0, column=1, sticky="e")
 
     def _build_tabs(self, row: int) -> None:
-        self._tabview = ctk.CTkTabview(self, height=260)
+        self._tabview = ctk.CTkTabview(self._main_frame, height=260)
         self._tabview.grid(row=row, column=0, sticky="ew", padx=16, pady=(8, 0))
         self._tabview.grid_columnconfigure(0, weight=1)
 
@@ -434,6 +450,9 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             height=36,
         )
         self._url_entry.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        # Enter key triggers screenshot on the URL/Drop tab only.
+        # The Paste HTML tab textbox intentionally has no such binding.
+        self._url_entry.bind("<Return>", lambda _e: self._trigger_screenshot())
 
     def _build_paste_tab(self, parent: ctk.CTkFrame) -> None:
         parent.grid_columnconfigure(0, weight=1)
@@ -456,7 +475,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._html_box.insert("0.0", "<!-- Paste your HTML here -->\n")
 
     def _build_controls(self, row: int) -> None:
-        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar = ctk.CTkFrame(self._main_frame, fg_color="transparent")
         bar.grid(row=row, column=0, sticky="ew", padx=16, pady=(10, 0))
 
         ctk.CTkButton(
@@ -502,12 +521,12 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ).pack(side="right", padx=(0, 6))
 
     def _build_progress(self, row: int) -> None:
-        self._progress = ctk.CTkProgressBar(self, mode="indeterminate", height=8)
+        self._progress = ctk.CTkProgressBar(self._main_frame, mode="indeterminate", height=8)
         self._progress.grid(row=row, column=0, sticky="ew", padx=16, pady=(10, 0))
         self._progress.set(0)
 
     def _build_log(self, row: int) -> None:
-        frame = ctk.CTkFrame(self)
+        frame = ctk.CTkFrame(self._main_frame)
         frame.grid(row=row, column=0, sticky="nsew", padx=16, pady=(10, 0))
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(1, weight=1)
@@ -527,7 +546,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._log_box.grid(row=1, column=0, sticky="nsew", padx=4, pady=(2, 4))
 
     def _build_statusbar(self, row: int) -> None:
-        bar = ctk.CTkFrame(self, fg_color="transparent", height=36)
+        bar = ctk.CTkFrame(self._main_frame, fg_color="transparent", height=36)
         bar.grid(row=row, column=0, sticky="ew", padx=16, pady=(6, 12))
         bar.grid_columnconfigure(0, weight=1)
 
@@ -604,7 +623,13 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._log(f"Selected: {path}")
 
     def _choose_output(self) -> None:
-        """Prompt for a fixed output path; reused until changed."""
+        """Prompt for a one-shot output path used for the NEXT screenshot only.
+        ⚠ OUTPUT-PATH SYNC NOTE: _saved_output is a one-shot StringVar.
+          It is set here and MUST be cleared in _on_success/_on_error after use.
+          If you add any other place that reads or persists the output path
+          (e.g. _load_config / _save_config / settings dialog), verify this
+          clear-after-use contract still holds, or stale-path bugs will recur.
+        """
         path = filedialog.asksaveasfilename(
             title="Save screenshot as…",
             defaultextension=".png",
@@ -614,7 +639,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         if path:
             self._saved_output.set(path)
-            self._log(f"Output override set (this session only): {path}")
+            self._log(f"Output override set (next screenshot only): {path}")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self, self._config)
@@ -763,12 +788,19 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _on_success(self, output: str) -> None:
         self._set_busy(False)
         self._last_output = output
+        # BUG FIX (stale-output): clear the one-shot Save-As override so the
+        # next render uses the template from Settings instead of repeating this
+        # exact path. See _choose_output docstring for the sync contract.
+        self._saved_output.set("")
         self._log(f"✓  Saved: {output}")
         self._status_label.configure(text=f"Saved → {output}", text_color=_ACCENT)
         self._open_folder_btn.configure(state="normal")
 
     def _on_error(self, message: str) -> None:
         self._set_busy(False)
+        # BUG FIX (stale-output): also clear on error so a failed render does
+        # not silently consume the Save-As override, leaving it stale.
+        self._saved_output.set("")
         self._log(f"✗  Error: {message}")
         self._status_label.configure(text="Error — see log.", text_color="#ff5555")
         self._drop_frame.configure(border_color="#ff5555")
