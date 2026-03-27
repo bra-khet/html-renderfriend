@@ -7,7 +7,7 @@ name            = "html-renderfriend"
 version         = "1.0.0"
 description     = "Full-page HTML/URL to PNG screenshotter — CLI + drag-and-drop GUI"
 readme          = "README.md"
-license         = { file = "LICENSE" }
+license         = {text = "MIT"}            # PEP 639 SPDX form (was: {file = "LICENSE"})
 requires-python = ">=3.11"
 
 dependencies = [

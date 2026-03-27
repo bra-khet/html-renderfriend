@@ -156,7 +156,13 @@ _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 def _sanitize(s: str, max_len: int = 80) -> str:
     """Replace filesystem-unsafe characters and truncate."""
-    s = _UNSAFE.sub("-", s).strip("-. ")
+    # BUG FIX: strip-trailing-sanitized-hyphens
+    # Fix: strip leading/trailing decoration characters BEFORE substitution so
+    #      that hyphens produced from unsafe chars at the end of the string
+    #      (e.g. 'file:name*?"<>|' → 'file-name------') are preserved.
+    #      Previously strip ran AFTER sub, so those legitimate trailing hyphens
+    #      were silently removed alongside decoration hyphens.
+    s = _UNSAFE.sub("-", s.strip("-. "))
     return s[:max_len] or "untitled"
 
 
@@ -180,11 +186,21 @@ def _resolve_filename(
         try:
             parsed = urlparse(source if "://" in source else f"https://{source}")
             domain = parsed.hostname or ""
-            name   = re.sub(r"^www\.", "", domain)
+            # BUG FIX: name-token-includes-tld
+            # Fix: {name} template variable must match the documented example
+            #      ("github", not "github.com"). Strip www. then take only the
+            #      first domain label so the TLD is not included in the filename.
+            # Sync: _TEMPLATE_VARS description, tests/test_filename.py
+            name   = re.sub(r"^www\.", "", domain).split(".")[0]
         except Exception:
             name = domain = "screenshot"
 
-    safe_title = _sanitize(page_title) if page_title else (name or "screenshot")
+    # BUG FIX: title-token-preserves-spaces
+    # Fix: {title} filenames must not contain raw spaces (breaks shell usage and
+    #      looks inconsistent with the hyphen-delimited name/domain tokens).
+    #      Replace spaces with hyphens before sanitising so "My Cool Page"
+    #      becomes "My-Cool-Page" rather than "My Cool Page".
+    safe_title = _sanitize(page_title.replace(" ", "-")) if page_title else (name or "screenshot")
 
     subs = {
         "{name}":   _sanitize(name)   or "screenshot",
