@@ -83,13 +83,13 @@ Output defaults to `Desktop/screenshot_<timestamp>.png`. Use **Save As…** to p
 venv\Scripts\activate
 
 # Remote URL
-htmlrf-screenshot https://example.com -o example.png
+htmlrf https://example.com -o example.png
 
 # Local HTML file
-htmlrf-screenshot "C:\MyPages\report.html" -o report.png --width 1440
+htmlrf "C:\MyPages\report.html" -o report.png --width 1440
 
 # See all options
-htmlrf-screenshot --help
+htmlrf --help
 ```
 
 **Drag-and-drop CLI:** drag an `.html` file onto `screenshot.bat` for an instant screenshot saved as `screenshot.png` in the same directory.

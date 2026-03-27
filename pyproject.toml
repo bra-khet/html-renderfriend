@@ -32,12 +32,14 @@ dev = [
 packages = ["src/htmlrf"]
 
 [project.scripts]
-# CLI entry point — allows `htmlrf-screenshot` after pip install
-htmlrf-screenshot = "htmlrf.screenshot:main"
+# CHANGED: CLI command renamed from htmlrf-screenshot to htmlrf
+# WHY: user-facing command for CLI should be the short, primary name
+htmlrf = "htmlrf.screenshot:main"
 
 [project.gui-scripts]
-# GUI entry point — windowed launcher (no console window on Windows)
-htmlrf = "htmlrf.gui:main"
+# CHANGED: GUI command renamed from htmlrf to htmlrf-gui
+# WHY: GUI launcher needs a distinct name now that htmlrf is taken by the CLI
+htmlrf-gui = "htmlrf.gui:main"
 
 # ── PyInstaller notes ──────────────────────────────────────────────────────────
 # Install the package first so PyInstaller can trace the htmlrf package:

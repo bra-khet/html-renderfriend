@@ -14,6 +14,8 @@ if "%~2"=="" (
     set OUTPUT=%~2
 )
 
-htmlrf-screenshot %1 -o "%OUTPUT%" %3 %4 %5
+:: CHANGED: command renamed from htmlrf-screenshot to htmlrf
+:: WHY: CLI entry point was renamed in pyproject.toml
+htmlrf %1 -o "%OUTPUT%" %3 %4 %5
 echo.
 pause

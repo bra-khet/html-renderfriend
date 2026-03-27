@@ -34,7 +34,7 @@ echo.
 echo [4/4] Done!  Run the app with one of:
 echo.
 echo        screenshot.bat "https://example.com" out.png     (CLI)
-echo        htmlrf-screenshot --help                         (CLI help)
+echo        htmlrf --help                                    (CLI help)
 echo        gui.bat                                           (GUI)
 echo.
 pause
