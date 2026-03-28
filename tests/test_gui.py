@@ -128,6 +128,34 @@ class TestSettingsDialogResult:
         ), "'result' must be a @property, not a plain attribute"
 
 
+# ── Viewport presets (v2.0) ──────────────────────────────────────────────────
+
+class TestViewportPresets:
+    """Validates the VIEWPORT_PRESETS mapping and bounds constants."""
+
+    def test_all_named_presets_have_positive_int_values(self):
+        from htmlrf.gui import VIEWPORT_PRESETS
+        for label, px in VIEWPORT_PRESETS.items():
+            if px is None:
+                continue  # "Custom..." sentinel
+            assert isinstance(px, int) and px > 0, f"Bad preset: {label}={px}"
+
+    def test_custom_sentinel_is_none(self):
+        from htmlrf.gui import VIEWPORT_PRESETS
+        customs = [k for k, v in VIEWPORT_PRESETS.items() if v is None]
+        assert len(customs) == 1, "Exactly one 'Custom...' sentinel expected"
+
+    def test_default_label_exists_in_presets(self):
+        from htmlrf.gui import VIEWPORT_PRESETS, DEFAULT_VIEWPORT_LABEL
+        assert DEFAULT_VIEWPORT_LABEL in VIEWPORT_PRESETS
+
+    def test_bounds_constants(self):
+        from htmlrf.gui import _VP_MIN, _VP_MAX
+        assert _VP_MIN == 320
+        assert _VP_MAX == 7680
+        assert _VP_MIN < _VP_MAX
+
+
 # ── App smoke test (display required) ────────────────────────────────────────
 
 class TestAppSmoke:
