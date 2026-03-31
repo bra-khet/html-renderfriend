@@ -6,5 +6,8 @@
       "Read(//c/Users/robin/**)",
       "Bash(source venv/Scripts/activate)"
     ]
-  }
+  },
+  "disabledMcpjsonServers": [
+    "kapture"
+  ]
 }
