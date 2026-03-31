@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time as _time
 import tkinter as tk
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -69,8 +70,19 @@ _BORDER_HOT   = _ACCENT
 _DROP_IDLE    = "#1e1e1e"
 _DROP_HOT     = "#0d2a1c"
 
-VIEWPORT_OPTIONS = ["1280", "1440", "1920", "2560"]
-DEFAULT_VIEWPORT = "1920"
+# CHANGED: named presets dict with "Custom..." sentinel replacing flat string list
+# WHY: v2.0 — users want descriptive labels, more presets (4K), and custom entry
+VIEWPORT_PRESETS: dict[str, int | None] = {
+    "HD (1280)":       1280,
+    "HD+ (1440)":      1440,
+    "Full HD (1920)":  1920,
+    "QHD (2560)":      2560,
+    "4K (3840)":       3840,
+    "Custom\u2026":    None,
+}
+DEFAULT_VIEWPORT_LABEL = "Full HD (1920)"
+# Minimum / maximum custom viewport bounds (px)
+_VP_MIN, _VP_MAX = 320, 7680
 
 # Log pane: trim to this many lines to prevent unbounded memory growth.
 # CHANGED: add line cap for the log textbox
@@ -436,7 +448,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
-        self.title("HTML Renderfriend • Full-Page Screenshotter v1.0")
+        self.title("HTML Renderfriend • Full-Page Screenshotter v2.0")
         self.geometry("800x660")
         self.resizable(True, True)
         self.minsize(700, 560)
@@ -445,12 +457,21 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._config         = _load_config()
         self._config.pop("output_path", None)   # remove legacy fixed-path override
         self._input_source   = tk.StringVar()   # URL or file path (Drop/URL tab)
-        self._viewport_var   = tk.StringVar(value=DEFAULT_VIEWPORT)
+        # CHANGED: viewport state now uses preset labels + custom px value
+        # WHY: v2.0 — named presets with a "Custom..." option require tracking both
+        saved_preset = self._config.get("viewport_preset", DEFAULT_VIEWPORT_LABEL)
+        if saved_preset not in VIEWPORT_PRESETS:
+            saved_preset = DEFAULT_VIEWPORT_LABEL
+        self._viewport_var   = tk.StringVar(value=saved_preset)
+        self._custom_vp_px   = self._config.get("custom_viewport", 1600)
         self._saved_output   = tk.StringVar()   # session-only; cleared on relaunch
         self._worker_running = False             # Guard against double-triggers
         self._tmp_html_path: str | None = None  # Temp file for pasted HTML
+        self._last_output: str = ""              # Path of the most recent saved PNG
 
+        self._ui_ready = False
         self._build_ui()
+        self._ui_ready = True
         self._bind_shortcuts()
         self._log("Ready — drop a file, enter a URL, or paste HTML.")
 
@@ -458,6 +479,63 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # WHY: without this, a missing Chromium installation only surfaces as a
         #      cryptic Playwright error after the user triggers their first render.
         threading.Thread(target=self._startup_health_check, daemon=True).start()
+
+    # ── Viewport helpers ────────────────────────────────────────────────────────
+
+    def _get_viewport_px(self) -> int:
+        """Resolve the current viewport selection to a pixel width."""
+        label = self._viewport_var.get()
+        px = VIEWPORT_PRESETS.get(label)
+        if px is not None:
+            return px
+        # Custom label like "Custom (1600)" or the sentinel — use stored value
+        return self._custom_vp_px
+
+    def _on_viewport_change(self, choice: str) -> None:
+        """Callback fired when the viewport OptionMenu value changes."""
+        if not getattr(self, "_ui_ready", False):
+            return  # guard against CTkOptionMenu firing during construction
+        if VIEWPORT_PRESETS.get(choice) is not None:
+            # Named preset — persist it
+            self._config["viewport_preset"] = choice
+            _save_config(self._config)
+            return
+        # "Custom..." selected — prompt for a width
+        self._ask_custom_viewport()
+
+    def _ask_custom_viewport(self) -> None:
+        """Show a small dialog asking the user for a custom viewport width."""
+        dialog = ctk.CTkInputDialog(
+            text=f"Enter viewport width ({_VP_MIN}–{_VP_MAX} px):",
+            title="Custom Viewport Width",
+        )
+        raw = dialog.get_input()
+        if not raw:
+            # Cancelled — revert to previous preset
+            prev = self._config.get("viewport_preset", DEFAULT_VIEWPORT_LABEL)
+            self._viewport_var.set(prev)
+            return
+        try:
+            px = int(raw)
+        except ValueError:
+            messagebox.showwarning("Invalid Width", f"'{raw}' is not a valid integer.")
+            prev = self._config.get("viewport_preset", DEFAULT_VIEWPORT_LABEL)
+            self._viewport_var.set(prev)
+            return
+        if not (_VP_MIN <= px <= _VP_MAX):
+            messagebox.showwarning(
+                "Out of Range",
+                f"Width must be {_VP_MIN}–{_VP_MAX} px (got {px}).",
+            )
+            prev = self._config.get("viewport_preset", DEFAULT_VIEWPORT_LABEL)
+            self._viewport_var.set(prev)
+            return
+        # Valid custom width — store it and update the label
+        self._custom_vp_px = px
+        self._viewport_var.set(f"Custom ({px})")
+        self._config["custom_viewport"] = px
+        self._config["viewport_preset"] = f"Custom ({px})"
+        _save_config(self._config)
 
     # ── Startup health check ───────────────────────────────────────────────────
 
@@ -634,11 +712,14 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ).pack(side="left", padx=(0, 16))
 
         ctk.CTkLabel(bar, text="Viewport:").pack(side="left", padx=(0, 5))
+        # CHANGED: use named presets + "Custom..." instead of raw pixel strings
+        # WHY: v2.0 — descriptive labels and arbitrary width entry
         ctk.CTkOptionMenu(
             bar,
             variable=self._viewport_var,
-            values=VIEWPORT_OPTIONS,
-            width=90,
+            values=list(VIEWPORT_PRESETS.keys()),
+            width=150,
+            command=self._on_viewport_change,
         ).pack(side="left")
 
         ctk.CTkButton(
@@ -793,12 +874,12 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._log(f"Selected: {path}")
 
     def _choose_output(self) -> None:
-        """Prompt for a one-shot output path used for the NEXT screenshot only.
-        ⚠ OUTPUT-PATH SYNC NOTE: _saved_output is a one-shot StringVar.
-          It is set here and MUST be cleared in _on_success/_on_error after use.
-          If you add any other place that reads or persists the output path
-          (e.g. _load_config / _save_config / settings dialog), verify this
-          clear-after-use contract still holds, or stale-path bugs will recur.
+        """
+        Prompt for a fixed one-shot output path used for the NEXT screenshot only.
+
+        _saved_output is set here and MUST be cleared after every render in both
+        _on_success and _on_error, or subsequent renders will silently repeat this
+        exact path instead of using the Settings filename template.
         """
         path = filedialog.asksaveasfilename(
             title="Save screenshot as…",
@@ -857,9 +938,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 return
             self._tmp_html_path = None
 
-        viewport = int(self._viewport_var.get())
+        viewport = self._get_viewport_px()
 
         # ── Build output resolver ─────────────────────────────────────────────
+        output_resolver: Callable[[str], str]
         fixed = self._saved_output.get().strip()
         if fixed:
             # Save As override — use the exact path regardless of template.
@@ -884,7 +966,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             daemon=True,
         ).start()
 
-    def _worker(self, source: str, output_resolver, viewport: int) -> None:
+    def _worker(self, source: str, output_resolver: Callable[[str], str], viewport: int) -> None:
         """
         Background thread.  Handles protocol auto-detection and HTTPS → HTTP
         fallback with a main-thread confirmation dialog via threading.Event.
@@ -960,9 +1042,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _on_success(self, output: str) -> None:
         self._set_busy(False)
         self._last_output = output
-        # BUG FIX (stale-output): clear the one-shot Save-As override so the
-        # next render uses the template from Settings instead of repeating this
-        # exact path. See _choose_output docstring for the sync contract.
+        # BUG FIX: stale-output
+        # Fix: clear the one-shot _saved_output after each render so the next
+        #      render uses the Settings template instead of repeating this path.
+        # Sync: _on_error (must also clear _saved_output on failure)
         self._saved_output.set("")
         # Re-arm the single-press Escape guard (cleared on error path too).
         self.bind("<Escape>", self._on_escape)
@@ -972,8 +1055,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _on_error(self, message: str) -> None:
         self._set_busy(False)
-        # BUG FIX (stale-output): also clear on error so a failed render does
-        # not silently consume the Save-As override, leaving it stale.
+        # BUG FIX: stale-output
+        # Fix: also clear _saved_output on failure — a failed render must not
+        #      silently consume the Save-As override, leaving it stale.
+        # Sync: _on_success (primary clear; see _choose_output for the sync contract)
         self._saved_output.set("")
         self.bind("<Escape>", self._on_escape)
         self._log(f"✗  Error: {message}")
@@ -1022,7 +1107,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
 
 def main() -> None:
-    """Entry point for [project.gui-scripts] — launched via `htmlrf` after install."""
+    """Entry point for [project.gui-scripts] — launched via `htmlrf-gui` after install."""
     app = HTMLRenderFriendApp()
     app.mainloop()
 

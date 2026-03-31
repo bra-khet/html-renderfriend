@@ -32,3 +32,11 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Credentials and secrets (defensive — none currently used by this project)
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+service-account.json

@@ -155,13 +155,14 @@ def main() -> None:
         default="screenshot.png",
         help="Output PNG path (default: screenshot.png in current directory)",
     )
+    # CHANGED: accept any integer width instead of a fixed choices list
+    # WHY: v2.0 — users need arbitrary widths (e.g. 1600, 3840) for custom viewports
     parser.add_argument(
         "-w", "--width",
         type=int,
         default=1920,
-        choices=[1280, 1440, 1920, 2560],
-        metavar="{1280,1440,1920,2560}",
-        help="Viewport width in pixels (default: 1920)",
+        metavar="PX",
+        help="Viewport width in pixels, 320–7680 (default: 1920)",
     )
     parser.add_argument(
         "--timeout",
@@ -171,6 +172,10 @@ def main() -> None:
         help="Navigation timeout in milliseconds (default: 30000)",
     )
     args = parser.parse_args()
+
+    if not (320 <= args.width <= 7680):
+        parser.error(f"--width must be between 320 and 7680 (got {args.width})")
+
     take_full_screenshot(args.input, args.output, args.width, timeout_ms=args.timeout)
 
 

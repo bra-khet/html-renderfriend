@@ -177,3 +177,63 @@ class TestTakeFullScreenshot:
             title, _ = take_full_screenshot("https://example.com", out)
 
         assert title == ""
+
+    def test_custom_viewport_width_forwarded(self, tmp_path):
+        """v2.0: non-preset widths (e.g. 1600) should work."""
+        out = str(tmp_path / "out.png")
+        mock_sync, mock_page = self._make_playwright_mock()
+        # mock_sync() returns the context-manager mock; __enter__ returns pw
+        mock_pw = mock_sync.return_value.__enter__.return_value
+        mock_browser = mock_pw.chromium.launch.return_value
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_screenshot("https://example.com", out, 1600)
+
+        # Verify the viewport was set to 1600
+        ctx_call = mock_browser.new_context.call_args
+        assert ctx_call[1]["viewport"]["width"] == 1600
+
+
+# ── CLI argument validation ──────────────────────────────────────────────────
+
+class TestCliWidthValidation:
+    """v2.0: --width accepts any int in [320, 7680], rejects out-of-range."""
+
+    def test_accepts_non_preset_width(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_take, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "1600"]):
+            main()
+        mock_take.assert_called_once()
+        assert mock_take.call_args[0][2] == 1600
+
+    def test_accepts_boundary_min(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_take, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "320"]):
+            main()
+        assert mock_take.call_args[0][2] == 320
+
+    def test_accepts_boundary_max(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_take, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "7680"]):
+            main()
+        assert mock_take.call_args[0][2] == 7680
+
+    def test_rejects_below_minimum(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "100"]), \
+             pytest.raises(SystemExit):
+            main()
+
+    def test_rejects_above_maximum(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "10000"]), \
+             pytest.raises(SystemExit):
+            main()

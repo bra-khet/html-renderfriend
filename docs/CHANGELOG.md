@@ -1,0 +1,61 @@
+# Changelog
+
+All notable changes to HTML RenderFriend are documented in this file.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [2.0.0] - 2026-03-28
+
+### Added
+- **Named viewport presets in GUI** — dropdown now shows descriptive labels:
+  HD (1280), HD+ (1440), Full HD (1920), QHD (2560), 4K (3840).
+- **"Custom..." viewport option** — selecting it opens a dialog where any
+  width between 320 and 7680 px can be entered. The custom value persists
+  across sessions in `~/.htmlrf_config.json`.
+- **Arbitrary CLI viewport widths** — `--width` / `-w` now accepts any
+  integer in the 320–7680 range instead of being locked to four presets.
+  Out-of-range values produce a clear error message.
+- **4K (3840 px) preset** — added to both the GUI dropdown and the
+  suggested widths in the README.
+- 10 new unit tests covering CLI range validation, preset mapping
+  integrity, custom-width forwarding through Playwright, and bounds
+  constants.
+
+### Changed
+- GUI title bar updated from v1.0 to v2.0.
+- Viewport dropdown widened from 90 px to 150 px to accommodate the
+  longer preset labels.
+- Viewport selection and last-used custom width are now saved to config
+  (`viewport_preset`, `custom_viewport` keys).
+
+### Fixed
+- **CTkOptionMenu construction callback** — added a `_ui_ready` guard so
+  the `command=` callback is not fired during widget construction, which
+  could open a blocking dialog before the main loop starts.
+
+---
+
+## [1.0.0] - 2026-03-26
+
+Initial public release.
+
+### Features
+- Full-page PNG screenshots of any URL or local HTML file via headless
+  Chromium (Playwright).
+- Dual interface: CLI (`htmlrf`) and GUI (`htmlrf-gui`) with
+  drag-and-drop, paste-HTML tab, and URL entry.
+- Configurable viewport widths (1280, 1440, 1920, 2560 px).
+- 2x Retina device scale factor for crisp output.
+- Filename template engine with variables: `{name}`, `{domain}`,
+  `{date}`, `{time}`, `{ts}`, `{title}`, `{seq}`, `{width}`.
+- Auto-increment `{seq}` collision avoidance.
+- HTTPS auto-upgrade for bare hostnames, with HTTP fallback prompt.
+- Persistent settings (output directory, filename template) via
+  `~/.htmlrf_config.json`.
+- Cross-platform support: Windows, macOS, Linux (fonts, folder opener,
+  dark-mode detection via `darkdetect`).
+- Startup Chromium health check with user-friendly warnings.
+- Modern PEP 621 packaging with `hatchling` build backend and `src/`
+  layout.
