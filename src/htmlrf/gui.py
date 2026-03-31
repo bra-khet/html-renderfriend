@@ -42,7 +42,9 @@ from tkinterdnd2 import TkinterDnD, DND_FILES
 
 # CHANGED: absolute import updated for src/ layout migration
 # WHY: package is now htmlrf.screenshot, not a root-level module
-from htmlrf.screenshot import take_full_screenshot, _resolve_url
+# CHANGED: also import take_full_pdf for PDF export mode
+# WHY: _worker dispatches to either function based on self._export_mode
+from htmlrf.screenshot import take_full_screenshot, take_full_pdf, _resolve_url
 
 _log = logging.getLogger(__name__)
 
@@ -65,6 +67,11 @@ _FONT_MONO = (
 # ── Design tokens ──────────────────────────────────────────────────────────────
 _ACCENT       = "#00ffaa"
 _ACCENT_HOVER = "#00cc88"
+# CHANGED: add PDF-mode color tokens for split button
+# WHY: split button needs a visually distinct (but harmonious) shade when
+#      PDF mode is active so the user has clear feedback about current mode.
+_PDF_COLOR       = "#00cc99"   # teal-green, distinct from PNG _ACCENT
+_PDF_COLOR_HOVER = "#009977"
 _BORDER_IDLE  = "#444444"
 _BORDER_HOT   = _ACCENT
 _DROP_IDLE    = "#1e1e1e"
@@ -501,7 +508,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
-        self.title("HTML Renderfriend • Full-Page Screenshotter v2.1")
+        self.title("HTML Renderfriend • Full-Page Screenshotter v2.2")
         self.geometry("800x660")
         self.resizable(True, True)
         self.minsize(700, 560)
@@ -520,7 +527,14 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._saved_output   = tk.StringVar()   # session-only; cleared on relaunch
         self._worker_running = False             # Guard against double-triggers
         self._tmp_html_path: str | None = None  # Temp file for pasted HTML
-        self._last_output: str = ""              # Path of the most recent saved PNG
+        self._last_output: str = ""              # Path of the most recently saved file
+        # CHANGED: export mode state — "png" or "pdf", persisted to config
+        # WHY: split button needs a StringVar so both button widgets can read the
+        #      current mode; persisting it saves the user's preference across sessions.
+        _saved_mode = self._config.get("export_mode", "png")
+        self._export_mode = tk.StringVar(
+            value=_saved_mode if _saved_mode in ("png", "pdf") else "png"
+        )
 
         self._ui_ready = False
         self._build_ui()
@@ -753,16 +767,41 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             command=self._open_file_dialog,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
-            bar,
-            text="Screenshot  ▶",
-            width=158,
+        # CHANGED: replace single screenshot button with a split-button group
+        # WHY: PDF export mode requires a mode-toggle mechanism without adding a
+        #      second full-width button. The split pattern (main action | ▼ arrow)
+        #      is a standard UI convention for "primary action with alternate choices".
+        self._action_frame = ctk.CTkFrame(bar, fg_color="transparent")
+        self._action_frame.pack(side="left", padx=(0, 16))
+
+        # Main action button — width 136 leaves 22 px for the arrow (1 px gap)
+        self._action_btn = ctk.CTkButton(
+            self._action_frame,
+            text="Save .PNG  ▶",
+            width=136,
             fg_color=_ACCENT,
             hover_color=_ACCENT_HOVER,
             text_color="#000000",
             font=ctk.CTkFont(_FONT_BODY, 13, "bold"),
             command=self._trigger_screenshot,
-        ).pack(side="left", padx=(0, 16))
+        )
+        self._action_btn.pack(side="left")
+
+        # Arrow dropdown button — 1 px gap from main button, same height
+        self._mode_btn = ctk.CTkButton(
+            self._action_frame,
+            text="▼",
+            width=22,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            text_color="#000000",
+            font=ctk.CTkFont(_FONT_BODY, 11, "bold"),
+            command=self._show_export_menu,
+        )
+        self._mode_btn.pack(side="left", padx=(1, 0))
+
+        # Sync initial colors/label from saved export mode
+        self._apply_export_mode()
 
         ctk.CTkLabel(bar, text="Viewport:").pack(side="left", padx=(0, 5))
         # CHANGED: use named presets + "Custom..." instead of raw pixel strings
@@ -926,6 +965,44 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._tabview.set("Drop / URL")
             self._log(f"Selected: {path}")
 
+    def _show_export_menu(self) -> None:
+        """Post a dropdown menu below the ▼ arrow to switch PNG / PDF export mode."""
+        # CHANGED: tk.Menu positioned below the arrow button
+        # WHY: CTk has no built-in popup menu widget; a standard tk.Menu posted at
+        #      button coordinates is the correct lightweight solution here.
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Save .PNG", command=lambda: self._set_export_mode("png"))
+        menu.add_command(label="Save .PDF", command=lambda: self._set_export_mode("pdf"))
+        x = self._mode_btn.winfo_rootx()
+        y = self._mode_btn.winfo_rooty() + self._mode_btn.winfo_height()
+        menu.tk_popup(x, y)
+
+    def _set_export_mode(self, mode: str) -> None:
+        """Switch between 'png' and 'pdf' export modes and persist the choice."""
+        # CHANGED: persist export_mode to config immediately on change
+        # WHY: user should not have to re-select their preferred mode each launch.
+        self._export_mode.set(mode)
+        self._config["export_mode"] = mode
+        _save_config(self._config)
+        self._apply_export_mode()
+        self._log(f"Export mode: {mode.upper()}")
+
+    def _apply_export_mode(self) -> None:
+        """Refresh split-button label and colors to match the current export mode."""
+        # CHANGED: both buttons in the split group update together on mode change
+        # WHY: the two buttons form one visual unit; inconsistent colors between
+        #      them would look broken.
+        if self._export_mode.get() == "pdf":
+            color = _PDF_COLOR
+            hover = _PDF_COLOR_HOVER
+            label = "Save .PDF  ▶"
+        else:
+            color = _ACCENT
+            hover = _ACCENT_HOVER
+            label = "Save .PNG  ▶"
+        self._action_btn.configure(text=label, fg_color=color, hover_color=hover)
+        self._mode_btn.configure(fg_color=color, hover_color=hover)
+
     def _choose_output(self) -> None:
         """
         Prompt for a fixed one-shot output path used for the NEXT screenshot only.
@@ -942,18 +1019,33 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         #      their values are only known after the page is rendered.
         template     = self._config.get("filename_template", DEFAULT_TEMPLATE)
         viewport     = self._get_viewport_px()
-        initial_name = _resolve_filename_placeholder(template, viewport)
+        # CHANGED: file dialog filter and default extension respect current export mode
+        # WHY: if user is in PDF mode and clicks Save As…, they should get a .pdf
+        #      file browser, not a .png one.
+        mode = self._export_mode.get()
+        if mode == "pdf":
+            default_ext  = ".pdf"
+            filetypes    = [("PDF document", "*.pdf")]
+            dialog_title = "Save PDF as…"
+            initial_name = _resolve_filename_placeholder(template, viewport).replace(
+                ".png", ".pdf"
+            )
+        else:
+            default_ext  = ".png"
+            filetypes    = [("PNG image", "*.png")]
+            dialog_title = "Save screenshot as…"
+            initial_name = _resolve_filename_placeholder(template, viewport)
 
         path = filedialog.asksaveasfilename(
-            title="Save screenshot as…",
-            defaultextension=".png",
-            filetypes=[("PNG image", "*.png")],
+            title=dialog_title,
+            defaultextension=default_ext,
+            filetypes=filetypes,
             initialdir=self._config.get("output_dir", str(_default_output_dir())),
             initialfile=initial_name,
         )
         if path:
             self._saved_output.set(path)
-            self._log(f"Output override set (next screenshot only): {path}")
+            self._log(f"Output override set (next render only): {path}")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self, self._config)
@@ -1003,6 +1095,12 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         viewport = self._get_viewport_px()
 
+        # CHANGED: capture export mode and derive output extension
+        # WHY: output_resolver must produce the correct file extension (.png or .pdf)
+        #      based on current mode before the worker thread starts.
+        mode = self._export_mode.get()
+        ext  = ".pdf" if mode == "pdf" else ".png"
+
         # ── Build output resolver ─────────────────────────────────────────────
         output_resolver: Callable[[str], str]
         fixed = self._saved_output.get().strip()
@@ -1015,13 +1113,18 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
             def output_resolver(page_title: str, _src=source, _vp=viewport,
-                                 _tmpl=template, _dir=output_dir) -> str:
+                                 _tmpl=template, _dir=output_dir, _ext=ext) -> str:
                 fname = _resolve_filename(_tmpl, _src, _vp, page_title, _dir)
+                # CHANGED: swap extension when in PDF mode
+                # WHY: _resolve_filename always returns a .png name; PDF mode
+                #      must produce .pdf filenames without modifying the template engine.
+                if _ext == ".pdf":
+                    fname = fname[:-4] + ".pdf"
                 return str(Path(_dir) / fname)
 
         # ── Dispatch ──────────────────────────────────────────────────────────
         self._set_busy(True)
-        self._log(f"Rendering  [{viewport}px]  {source[:90]}")
+        self._log(f"Rendering [{mode.upper()}]  [{viewport}px]  {source[:90]}")
 
         threading.Thread(
             target=self._worker,
@@ -1034,6 +1137,19 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         Background thread.  Handles protocol auto-detection and HTTPS → HTTP
         fallback with a main-thread confirmation dialog via threading.Event.
         """
+        # CHANGED: capture export mode at thread start
+        # WHY: self._export_mode is a StringVar on the main thread; reading .get()
+        #      once here avoids repeated cross-thread access inside the worker.
+        mode = self._export_mode.get()
+
+        def _render(src: str) -> tuple[str, str]:
+            # CHANGED: dispatch to take_full_pdf or take_full_screenshot based on mode
+            # WHY: _worker handles both PNG and PDF rendering; the format-specific call
+            #      is the only difference — all HTTPS-fallback logic is shared.
+            if mode == "pdf":
+                return take_full_pdf(src, output_resolver, viewport)
+            return take_full_screenshot(src, output_resolver, viewport)
+
         resolved_source, was_upgraded = _resolve_url(source)
         if was_upgraded:
             self.after(0, lambda: self._log(
@@ -1041,9 +1157,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             ))
 
         try:
-            _title, final_path = take_full_screenshot(
-                resolved_source, output_resolver, viewport
-            )
+            _title, final_path = _render(resolved_source)
             self.after(0, lambda: self._on_success(final_path))
             return
         except Exception as exc:
@@ -1083,9 +1197,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.after(0, lambda: self._log(f"Retrying over HTTP: {http_source}"))
 
         try:
-            _title, final_path = take_full_screenshot(
-                http_source, output_resolver, viewport
-            )
+            _title, final_path = _render(http_source)
             self.after(0, lambda: self._on_success(final_path))
         except Exception as exc2:
             msg = str(exc2)
@@ -1128,7 +1240,13 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._status_label.configure(text="Error — see log.", text_color="#ff5555")
         self._drop_frame.configure(border_color="#ff5555")
         self.after(2000, self._reset_drop_zone)
-        messagebox.showerror("Screenshot failed", message)
+        # CHANGED: error title reflects current export mode
+        # WHY: "Screenshot failed" is confusing when the user is exporting a PDF.
+        mode = self._export_mode.get()
+        messagebox.showerror(
+            "Export failed" if mode == "pdf" else "Screenshot failed",
+            message,
+        )
 
     # ── UI helpers ─────────────────────────────────────────────────────────────
 

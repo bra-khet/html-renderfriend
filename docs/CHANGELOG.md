@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.2.0] - 2026-03-31
+
+### Added
+
+- **PDF export** — `take_full_pdf()` renders any URL or local HTML file to a
+  paginated PDF via Playwright's `page.pdf()` API.  No new dependencies — the
+  same headless Chromium instance already used for PNG screenshots produces the
+  PDF.  `emulate_media("screen")` is applied before export so the PDF matches
+  the PNG visually rather than defaulting to `@media print` stylesheets.
+
+- **Split-button group** replaces the single green "Screenshot ▶" button in the GUI:
+  - Main button shows **"Save .PNG  ▶"** (bright green `#00ffaa`) or
+    **"Save .PDF  ▶"** (teal-green `#00cc99`) depending on active mode.
+  - Adjacent **▼** arrow opens a two-item dropdown to switch between modes.
+  - Mode is persisted to `~/.htmlrf_config.json` (`export_mode` key) and
+    restored on the next launch.
+
+- **CLI PDF output** — `htmlrf page.html -o report.pdf` auto-detects the `.pdf`
+  extension and calls `take_full_pdf()` with no extra flag required.
+
+- **`--format` CLI flag** — selects PDF paper size: `A4` (default), `Letter`,
+  `Legal`, `Tabloid`.  Ignored when the output file is not `.pdf`.
+
+- **Ctrl+S** keyboard shortcut works in both PNG and PDF modes (triggers
+  whichever mode is currently active).
+
+- **Save As…** dialog filter and default extension update dynamically
+  when export mode is switched (`.png` ↔ `.pdf`).
+
+### Changed
+
+- `_prepare_page()` private helper extracted from `take_full_screenshot()` to
+  share identical navigation, scroll, and settle logic with `take_full_pdf()`.
+- Window title updated to **v2.2**.
+- `pyproject.toml` description updated to mention PDF rendering.
+
+---
+
 ## [2.1.0] - 2026-03-31
 
 ### Project

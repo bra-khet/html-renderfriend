@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from htmlrf.screenshot import _resolve_url, take_full_screenshot
+from htmlrf.screenshot import _resolve_url, take_full_screenshot, take_full_pdf
 
 
 # ── _resolve_url ───────────────────────────────────────────────────────────────
@@ -237,3 +237,176 @@ class TestCliWidthValidation:
         with patch.object(sys, "argv", ["htmlrf", "https://example.com", "-w", "10000"]), \
              pytest.raises(SystemExit):
             main()
+
+
+# ── take_full_pdf (mocked Playwright) ─────────────────────────────────────────
+
+class TestTakeFullPdf:
+    """Mirrors TestTakeFullScreenshot but for take_full_pdf."""
+
+    def _make_playwright_mock(self, page_title: str = "Test Page"):
+        """Return a nested mock that satisfies sync_playwright for PDF calls."""
+        mock_page = MagicMock()
+        mock_page.title.return_value = page_title
+        mock_page.goto.return_value  = None
+        mock_page.evaluate.return_value = None
+        mock_page.wait_for_function.return_value = None
+        mock_page.screenshot.return_value = None
+        mock_page.pdf.return_value = None
+        mock_page.emulate_media.return_value = None
+
+        mock_context = MagicMock()
+        mock_context.new_page.return_value = mock_page
+
+        mock_browser = MagicMock()
+        mock_browser.new_context.return_value = mock_context
+        mock_browser.close.return_value = None
+
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch.return_value = mock_browser
+        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
+        mock_pw.__exit__  = MagicMock(return_value=False)
+
+        mock_sync = MagicMock(return_value=mock_pw)
+        return mock_sync, mock_page
+
+    def test_returns_title_and_path(self, tmp_path):
+        out = str(tmp_path / "out.pdf")
+        mock_sync, mock_page = self._make_playwright_mock("Hello PDF")
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            title, path = take_full_pdf("https://example.com", out)
+
+        assert title == "Hello PDF"
+        assert path  == out
+
+    def test_callable_output_receives_page_title(self, tmp_path):
+        received = []
+
+        def resolver(title: str) -> str:
+            received.append(title)
+            return str(tmp_path / f"{title}.pdf")
+
+        mock_sync, _ = self._make_playwright_mock("My PDF Page")
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            title, path = take_full_pdf("https://example.com", resolver)
+
+        assert received == ["My PDF Page"]
+        assert path.endswith("My PDF Page.pdf")
+
+    def test_calls_page_pdf_not_screenshot(self, tmp_path):
+        """PDF function must call page.pdf(), never page.screenshot()."""
+        out = str(tmp_path / "out.pdf")
+        mock_sync, mock_page = self._make_playwright_mock()
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_pdf("https://example.com", out)
+
+        assert mock_page.pdf.called,        "page.pdf() should be called for PDF export"
+        assert not mock_page.screenshot.called, "page.screenshot() must NOT be called for PDF export"
+
+    def test_pdf_format_forwarded(self, tmp_path):
+        """pdf_format parameter must be passed to page.pdf(format=...)."""
+        out = str(tmp_path / "out.pdf")
+        mock_sync, mock_page = self._make_playwright_mock()
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_pdf("https://example.com", out, pdf_format="Letter")
+
+        call_kwargs = mock_page.pdf.call_args[1]
+        assert call_kwargs.get("format") == "Letter"
+
+    def test_emulate_media_screen_called(self, tmp_path):
+        """emulate_media('screen') must be called so PDF matches the PNG visually."""
+        out = str(tmp_path / "out.pdf")
+        mock_sync, mock_page = self._make_playwright_mock()
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_pdf("https://example.com", out)
+
+        mock_page.emulate_media.assert_called_once_with(media="screen")
+
+    def test_local_html_uses_file_uri(self, tmp_path):
+        f = tmp_path / "page.html"
+        f.write_text("<p>test</p>")
+        out = str(tmp_path / "out.pdf")
+
+        mock_sync, mock_page = self._make_playwright_mock()
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_pdf(str(f), out)
+
+        nav_url = mock_page.goto.call_args[0][0]
+        assert nav_url.startswith("file:///"), (
+            f"Expected file:/// URI, got: {nav_url}"
+        )
+
+    def test_default_format_is_a4(self, tmp_path):
+        out = str(tmp_path / "out.pdf")
+        mock_sync, mock_page = self._make_playwright_mock()
+
+        with patch("htmlrf.screenshot.sync_playwright", mock_sync):
+            take_full_pdf("https://example.com", out)
+
+        call_kwargs = mock_page.pdf.call_args[1]
+        assert call_kwargs.get("format") == "A4"
+
+
+# ── CLI format dispatch ────────────────────────────────────────────────────────
+
+class TestCliFormatDispatch:
+    """CLI auto-detects PNG vs PDF from output file extension."""
+
+    def test_png_extension_calls_screenshot(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_png, \
+             patch("htmlrf.screenshot.take_full_pdf") as mock_pdf, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-o", "out.png"]):
+            main()
+        mock_png.assert_called_once()
+        mock_pdf.assert_not_called()
+
+    def test_pdf_extension_calls_pdf(self):
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_png, \
+             patch("htmlrf.screenshot.take_full_pdf") as mock_pdf, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-o", "out.pdf"]):
+            main()
+        mock_pdf.assert_called_once()
+        mock_png.assert_not_called()
+
+    def test_other_extension_defaults_to_screenshot(self):
+        """Any extension other than .pdf routes to take_full_screenshot."""
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_png, \
+             patch("htmlrf.screenshot.take_full_pdf") as mock_pdf, \
+             patch.object(sys, "argv", ["htmlrf", "https://example.com", "-o", "out.jpg"]):
+            main()
+        mock_png.assert_called_once()
+        mock_pdf.assert_not_called()
+
+    def test_format_flag_forwarded_to_pdf(self):
+        """--format Letter must reach take_full_pdf as pdf_format='Letter'."""
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_pdf") as mock_pdf, \
+             patch.object(sys, "argv", [
+                 "htmlrf", "https://example.com", "-o", "out.pdf", "--format", "Letter"
+             ]):
+            main()
+        call_kwargs = mock_pdf.call_args[1]
+        assert call_kwargs.get("pdf_format") == "Letter"
+
+    def test_format_flag_ignored_for_png(self):
+        """--format A4 with .png output should not cause an error."""
+        from htmlrf.screenshot import main
+        import sys
+        with patch("htmlrf.screenshot.take_full_screenshot") as mock_png, \
+             patch("htmlrf.screenshot.take_full_pdf"), \
+             patch.object(sys, "argv", [
+                 "htmlrf", "https://example.com", "-o", "out.png", "--format", "A4"
+             ]):
+            main()
+        mock_png.assert_called_once()
