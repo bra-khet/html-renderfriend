@@ -33,7 +33,14 @@ Desktop.ini
 # Logs
 *.log
 
+# Dependencies
+node_modules/
+
+# Test coverage
+coverage/
+
 # Credentials and secrets (defensive — none currently used by this project)
+.claude/settings.local.json
 .env
 .env.*
 *.key
