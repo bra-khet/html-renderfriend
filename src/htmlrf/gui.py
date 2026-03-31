@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time as _time
 import tkinter as tk
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -466,6 +467,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._saved_output   = tk.StringVar()   # session-only; cleared on relaunch
         self._worker_running = False             # Guard against double-triggers
         self._tmp_html_path: str | None = None  # Temp file for pasted HTML
+        self._last_output: str = ""              # Path of the most recent saved PNG
 
         self._ui_ready = False
         self._build_ui()
@@ -872,12 +874,12 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._log(f"Selected: {path}")
 
     def _choose_output(self) -> None:
-        """Prompt for a one-shot output path used for the NEXT screenshot only.
-        ⚠ OUTPUT-PATH SYNC NOTE: _saved_output is a one-shot StringVar.
-          It is set here and MUST be cleared in _on_success/_on_error after use.
-          If you add any other place that reads or persists the output path
-          (e.g. _load_config / _save_config / settings dialog), verify this
-          clear-after-use contract still holds, or stale-path bugs will recur.
+        """
+        Prompt for a fixed one-shot output path used for the NEXT screenshot only.
+
+        _saved_output is set here and MUST be cleared after every render in both
+        _on_success and _on_error, or subsequent renders will silently repeat this
+        exact path instead of using the Settings filename template.
         """
         path = filedialog.asksaveasfilename(
             title="Save screenshot as…",
@@ -939,6 +941,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         viewport = self._get_viewport_px()
 
         # ── Build output resolver ─────────────────────────────────────────────
+        output_resolver: Callable[[str], str]
         fixed = self._saved_output.get().strip()
         if fixed:
             # Save As override — use the exact path regardless of template.
@@ -963,7 +966,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
             daemon=True,
         ).start()
 
-    def _worker(self, source: str, output_resolver, viewport: int) -> None:
+    def _worker(self, source: str, output_resolver: Callable[[str], str], viewport: int) -> None:
         """
         Background thread.  Handles protocol auto-detection and HTTPS → HTTP
         fallback with a main-thread confirmation dialog via threading.Event.
@@ -1039,9 +1042,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _on_success(self, output: str) -> None:
         self._set_busy(False)
         self._last_output = output
-        # BUG FIX (stale-output): clear the one-shot Save-As override so the
-        # next render uses the template from Settings instead of repeating this
-        # exact path. See _choose_output docstring for the sync contract.
+        # BUG FIX: stale-output
+        # Fix: clear the one-shot _saved_output after each render so the next
+        #      render uses the Settings template instead of repeating this path.
+        # Sync: _on_error (must also clear _saved_output on failure)
         self._saved_output.set("")
         # Re-arm the single-press Escape guard (cleared on error path too).
         self.bind("<Escape>", self._on_escape)
@@ -1051,8 +1055,10 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _on_error(self, message: str) -> None:
         self._set_busy(False)
-        # BUG FIX (stale-output): also clear on error so a failed render does
-        # not silently consume the Save-As override, leaving it stale.
+        # BUG FIX: stale-output
+        # Fix: also clear _saved_output on failure — a failed render must not
+        #      silently consume the Save-As override, leaving it stale.
+        # Sync: _on_success (primary clear; see _choose_output for the sync contract)
         self._saved_output.set("")
         self.bind("<Escape>", self._on_escape)
         self._log(f"✗  Error: {message}")
@@ -1101,7 +1107,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
 
 def main() -> None:
-    """Entry point for [project.gui-scripts] — launched via `htmlrf` after install."""
+    """Entry point for [project.gui-scripts] — launched via `htmlrf-gui` after install."""
     app = HTMLRenderFriendApp()
     app.mainloop()
 
