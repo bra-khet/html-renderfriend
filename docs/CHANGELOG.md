@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.1.0] - 2026-03-31
+
+### Project
+
+- **AI-Firstified** — repository structure, CLAUDE.md, skills, and workflow
+  conventions were overhauled to align with AI-first development principles:
+  sprint discipline, inline provenance comments (`# CHANGED:` / `# WHY:` /
+  `# BUG FIX:`), skill-driven automation (`/run-tests`, `/build-exe`), and
+  session-initialization hooks.  No functional changes were made as part of
+  this overhaul.
+
+### Changed
+
+- **Save As… placeholder filename** — the initial filename shown in the
+  *Save As…* dialog now reflects the user's configured Filename Template
+  (from Screenshot Settings) instead of the old hardcoded
+  `screenshot_YYYYMMDD_HHMMSS` boilerplate.
+  - Time-based tokens (`{date}`, `{time}`, `{ts}`, `{year}`, `{month}`,
+    `{day}`) and `{width}` are resolved to real values at dialog-open time.
+  - Source-dependent tokens (`{name}`, `{domain}`, `{title}`) and the
+    collision-dependent token (`{seq}`) are shown as their bare token-name
+    (e.g. `name`, `domain`) since they require the page to load first.
+  - Example with default template `{name}_{date}_{time}`:
+    dialog now shows `name_2026-03-31_14-30-00.png` instead of
+    `screenshot_20260331_143000.png`.
+
+---
+
 ## [2.0.0] - 2026-03-28
 
 ### Added

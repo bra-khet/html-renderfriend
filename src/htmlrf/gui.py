@@ -255,6 +255,59 @@ def _resolve_filename(
     return stem + ".png"
 
 
+# CHANGED: new helper for partially-resolved template display in Save As dialog
+# WHY: v2.1 — Save As initialfile should reflect the user's template rather than
+#      a hardcoded "screenshot_YYYYMMDD_HHMMSS" boilerplate.  Tokens that can
+#      be evaluated at dialog-open time (datetime, viewport) are expanded to real
+#      values; source-dependent tokens require the page to load and are shown as
+#      their bare token-name so the dialog remains self-documenting.
+def _resolve_filename_placeholder(template: str, viewport: int) -> str:
+    """
+    Partially resolve a filename template for use as the Save As… dialog hint.
+
+    Tokens resolvable now (deterministic from current state):
+        {date}, {year}, {month}, {day}, {time}, {ts}  — from datetime.now()
+        {width}                                        — from current viewport
+
+    Tokens NOT resolvable until the page loads (shown as bare names):
+        {name}, {domain}  — derived from the URL/file path after navigation
+        {title}           — extracted from the page <title> element
+        {seq}             — determined by collision-scan against output_dir
+
+    The returned string is a hint only; the authoritative filename is always
+    produced by _resolve_filename() once the screenshot completes.
+    """
+    now = _now()
+
+    # Resolvable at dialog-open time
+    resolved: dict[str, str] = {
+        "{date}":  now.strftime("%Y-%m-%d"),
+        "{year}":  now.strftime("%Y"),
+        "{month}": now.strftime("%m"),
+        "{day}":   now.strftime("%d"),
+        "{time}":  now.strftime("%H-%M-%S"),
+        "{ts}":    str(int(_time.time())),
+        "{width}": str(viewport),
+    }
+
+    # Source-dependent / collision-dependent — keep as self-documenting names.
+    # Angle brackets are filesystem-unsafe, so use bare lowercase names instead;
+    # _sanitize will leave alphanumeric characters untouched.
+    unresolvable: dict[str, str] = {
+        "{name}":   "name",
+        "{domain}": "domain",
+        "{title}":  "title",
+        "{seq}":    "seq",
+    }
+
+    stem = template
+    for token, val in {**resolved, **unresolvable}.items():
+        stem = stem.replace(token, val)
+
+    stem = _sanitize(stem) or "screenshot"
+    return stem + ".png"
+
+
 # ── Settings dialog ────────────────────────────────────────────────────────────
 
 class SettingsDialog(ctk.CTkToplevel):
@@ -448,7 +501,7 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
-        self.title("HTML Renderfriend • Full-Page Screenshotter v2.0")
+        self.title("HTML Renderfriend • Full-Page Screenshotter v2.1")
         self.geometry("800x660")
         self.resizable(True, True)
         self.minsize(700, 560)
@@ -881,12 +934,22 @@ class HTMLRenderFriendApp(ctk.CTk, TkinterDnD.DnDWrapper):
         _on_success and _on_error, or subsequent renders will silently repeat this
         exact path instead of using the Settings filename template.
         """
+        # CHANGED: derive initialfile from the current filename template so the
+        #          dialog preview reflects the user's settings rather than the old
+        #          hardcoded "screenshot_YYYYMMDD_HHMMSS" boilerplate.
+        # WHY: v2.1 — time tokens are resolved now; source-dependent tokens
+        #      (name, domain, title, seq) show as bare placeholder names because
+        #      their values are only known after the page is rendered.
+        template     = self._config.get("filename_template", DEFAULT_TEMPLATE)
+        viewport     = self._get_viewport_px()
+        initial_name = _resolve_filename_placeholder(template, viewport)
+
         path = filedialog.asksaveasfilename(
             title="Save screenshot as…",
             defaultextension=".png",
             filetypes=[("PNG image", "*.png")],
             initialdir=self._config.get("output_dir", str(_default_output_dir())),
-            initialfile=f"screenshot_{_now():%Y%m%d_%H%M%S}.png",
+            initialfile=initial_name,
         )
         if path:
             self._saved_output.set(path)
