@@ -11,8 +11,6 @@ pip install html-renderfriend
 playwright install chromium
 ```
 
-Pypi project page: https://pypi.org/project/html-renderfriend/2.2.0/
-
 
 ---
 
