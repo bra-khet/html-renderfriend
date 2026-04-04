@@ -15,12 +15,15 @@ Three layers, each with a distinct responsibility:
 
 1. **`src/htmlrf/screenshot.py`** — Core public API: `take_full_screenshot(input_source, output_png, viewport_width, *, timeout_ms)`.
    - `output_png` accepts a `str` path **or** a `Callable[[str], str]` (page_title → path) for template-based naming.
-   - `_resolve_url()` normalizes bare hostnames to `https://`; also imported by the GUI.
+   - `take_full_pdf(input_source, output_pdf, ..., pdf_format="A4")` — same signature shape; supports Letter/Legal/Tabloid.
+   - `_prepare_page()` — shared browser navigation helper used by both export functions.
+   - `_resolve_url()` normalizes bare hostnames to `https://`; returns `tuple[str, bool]` (resolved, was_upgraded). Imported by GUI.
 
 2. **`src/htmlrf/gui.py`** — CustomTkinter + TkinterDnD2 window.
    - Playwright runs in a **daemon worker thread**; all GUI updates use `self.after(0, callback)` for Tkinter thread-safety.
    - Viewport preset dict (`VIEWPORT_PRESETS`) uses a `None` sentinel for the "Custom…" entry.
    - Config persisted to `~/.htmlrf_config.json`.
+   - Export mode (`"png"` | `"pdf"`) tracked via `StringVar`; persisted to config as `export_mode`. Split button uses `_PDF_COLOR` teal when PDF mode is active.
 
 3. **`pyproject.toml`** — Hatchling build, entry-point declarations, runtime + dev dependencies.
 
@@ -38,6 +41,7 @@ pytest -k "TestResolveFilename"           # single class
 
 # Run
 htmlrf https://example.com -o out.png     # CLI  (--width 320–7680, --timeout ms)
+htmlrf https://example.com -o out.pdf --format Letter   # PDF export (A4/Letter/Legal/Tabloid)
 htmlrf-gui                                 # GUI  (Ctrl+S screenshot, Ctrl+D paste, Esc quit)
 
 # Build standalone EXE
@@ -61,7 +65,6 @@ pyinstaller --onefile --windowed --name htmlrf src/htmlrf/gui.py
 - `/run-tests` — Run the test suite with scope options
 - `/build-exe` — Build the PyInstaller standalone EXE
 
-## Branches
+## Conventions
 
-Active feature branch: `v2.0-dev` → PR to `main`.
 Sprint commits follow: `Sprint: <description>`. History in `docs/CHANGELOG.md`.
